@@ -5,26 +5,47 @@
 [![CI](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/conduit-core.svg)](https://github.com/userFRM/tauri-conduit#license)
 
-Binary IPC core for Tauri v2: codec, dispatch table, and ring buffer.
+Binary IPC core for Tauri v2: codec, router, ring buffer, and ordered queue.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace.
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v1.0.0).
 
 ## Features
 
-- **11-byte frame codec** with `WireEncode`/`WireDecode` traits for zero-parse binary serialization
-- **Synchronous dispatch table** for named command handlers
-- **In-process ring buffer** with lossy back-pressure for streaming
+- **11-byte frame codec** with `Encode`/`Decode` traits for zero-parse binary serialization
+- **Synchronous router** for named command handlers (raw, JSON, and binary)
+- **In-process ring buffer** (`RingBuffer`) with lossy back-pressure for streaming
+- **Ordered queue** (`Queue`) with guaranteed delivery and backpressure
+- **Channel abstraction** (`ChannelBuffer`) unifying lossy and ordered channels
+
+## Key Types
+
+| Type | Purpose |
+|---|---|
+| `Router` | Named synchronous command registry (`register`, `register_json`, `register_binary`, `call`) |
+| `RingBuffer` | Thread-safe lossy circular buffer — oldest frames dropped on overflow |
+| `Queue` | Thread-safe ordered buffer — backpressure when full, no data loss |
+| `ChannelBuffer` | Enum wrapping `RingBuffer` or `Queue` with a unified push/drain API |
+| `FrameHeader` | 11-byte binary frame header for all conduit messages |
+| `Encode` / `Decode` | Traits for fixed-layout binary serialization |
+| `Error` | Error types (`UnknownCommand`, `DecodeFailed`, `Serialize`, etc.) |
 
 ## Usage
 
 ```rust
-use conduit_core::{DispatchTable, ConduitRingBuffer, frame_wrap, FrameHeader};
+use conduit_core::{Router, RingBuffer, Queue, ChannelBuffer, frame_pack, FrameHeader};
 
-let table = DispatchTable::new();
-table.register("ping", |_| b"pong".to_vec());
+// Raw handler
+let router = Router::new();
+router.register("ping", |_| b"pong".to_vec());
 
-let response = table.dispatch("ping", vec![]).unwrap();
+let response = router.call("ping", vec![]).unwrap();
 assert_eq!(response, b"pong");
+
+// JSON handler
+router.register_json("add", |args: (i32, i32)| args.0 + args.1);
+
+// Binary handler (with Encode/Decode types)
+// router.register_binary("process", |tick: MarketTick| tick);
 ```
 
 ## Benchmarks

@@ -26,9 +26,9 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 /// }
 /// ```
 #[proc_macro_derive(Encode)]
-pub fn derive_wire_encode(input: TokenStream) -> TokenStream {
+pub fn derive_encode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match impl_wire_encode(&input) {
+    match impl_encode(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -54,9 +54,9 @@ pub fn derive_wire_encode(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 #[proc_macro_derive(Decode)]
-pub fn derive_wire_decode(input: TokenStream) -> TokenStream {
+pub fn derive_decode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match impl_wire_decode(&input) {
+    match impl_decode(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -99,7 +99,7 @@ fn reject_generics(input: &DeriveInput) -> syn::Result<()> {
 
 /// Generate the `Encode` impl: encodes each named field in declaration
 /// order and sums their `encode_size()` for the total.
-fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn impl_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     reject_generics(input)?;
     let name = &input.ident;
     let fields = named_fields(input)?;
@@ -150,7 +150,7 @@ fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
 
 /// Generate the `Decode` impl: decodes each named field in declaration
 /// order, tracking the cumulative byte offset through the input slice.
-fn impl_wire_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     reject_generics(input)?;
     let name = &input.ident;
     let fields = named_fields(input)?;

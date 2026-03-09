@@ -3,7 +3,7 @@
  *
  * 11-byte binary frame header:
  *   version       (u8)     byte 0
- *   transport    (u8)     byte 1     0=protocol (reserved)
+ *   reserved      (u8)     byte 1     0 (reserved for future use)
  *   msg_type      (u8)     byte 2
  *   sequence      (u32 LE) bytes 3-6
  *   payload_len   (u32 LE) bytes 7-10

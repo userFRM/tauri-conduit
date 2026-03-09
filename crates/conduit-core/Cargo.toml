@@ -36,6 +36,14 @@ harness = false
 name = "comparison_bench"
 harness = false
 
+[[bench]]
+name = "handler_bench"
+harness = false
+
+[[bench]]
+name = "queue_bench"
+harness = false
+
 [[example]]
 name = "basic_usage"
 path = "examples/basic_usage.rs"

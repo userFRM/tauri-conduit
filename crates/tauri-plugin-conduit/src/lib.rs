@@ -257,11 +257,11 @@ impl PluginBuilder {
 
     // -- JSON handlers (Level 1) --------------------------------------------
 
-    /// Register a typed JSON command handler.
+    /// Typed JSON handler. Deserializes the request payload as `A` and
+    /// serializes the response as `R`.
     ///
-    /// The request payload is deserialized from JSON via `serde_json`, and the
-    /// response is serialized back to JSON. This is the ergonomic equivalent of
-    /// Tauri's `#[tauri::command]` for conduit.
+    /// Unlike Tauri's `#[tauri::command]`, this takes a single argument type
+    /// (not named parameters) and does not support async or State injection.
     ///
     /// ```rust,ignore
     /// .command_json("greet", |name: String| format!("Hello, {name}!"))

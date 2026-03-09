@@ -23,10 +23,10 @@ cargo clippy --workspace
 ```
 crates/
   conduit-core/     Core library (codec, router, ring buffer)
-  conduit-derive/   Proc macros (WireEncode, WireDecode)
-  conduit-tauri/    Tauri v2 plugin (requires Tauri app context)
+  conduit-derive/   Proc macros (Encode, Decode)
+  tauri-plugin-conduit/  Tauri v2 plugin (requires Tauri app context)
 packages/
-  tauri-conduit/    TypeScript client (@tauri-conduit/client)
+  tauri-plugin-conduit/  TypeScript client (tauri-plugin-conduit)
 ```
 
 ### Running Tests

@@ -6,9 +6,9 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
-**A faster drop-in replacement for Tauri's `invoke()`.**
+**Binary IPC for Tauri v2 via `conduit://` custom protocol.**
 
-Swap one import and your Tauri v2 app gets **2.4x faster IPC** through an in-process custom protocol. Go further with binary mode for up to **2400x faster** on large payloads.
+Replaces Tauri's JSON-over-webview IPC with an in-process custom protocol. Level 1 (JSON, drop-in compatible) measures ~2.4x faster. Level 2 (binary) measures up to ~2400x faster on 64 KB payloads.
 
 ```diff
 - import { invoke } from '@tauri-apps/api/core';
@@ -54,28 +54,24 @@ graph TB
 
 ---
 
-## "Does a Tauri app really need this?"
+## When this is useful
 
-If your app sends a button click and gets a string back, probably not -- Tauri's built-in IPC is fine for that.
+For apps where IPC is not on the critical path (button clicks, form submissions, occasional data fetches), Tauri's built-in `invoke()` is sufficient.
 
-But Tauri is increasingly used for apps where performance actually matters: trading terminals streaming real-time market data, audio/video tools processing buffers every frame, IoT dashboards ingesting sensor telemetry, game overlays syncing state at 60+ fps. In these cases, the IPC layer between your frontend and backend becomes the bottleneck -- not Rust, not your logic, just the bridge.
-
-conduit exists so you don't have to choose between Tauri's developer experience and the performance your use case demands.
+conduit targets apps where IPC throughput matters: streaming real-time data, processing binary buffers per-frame, or ingesting high-frequency telemetry. In these cases, the serialization and bridge overhead becomes measurable.
 
 ## Two levels of optimization
 
-conduit gives you a progressive optimization path -- start easy, go deeper where it matters.
+conduit provides two optimization tiers. Level 1 is a drop-in replacement. Level 2 eliminates JSON entirely.
 
-### Level 1: Drop-in replacement -- 2.4x faster
+### Level 1: Drop-in replacement -- ~2.4x faster
 
-Change one import. Your existing code keeps working.
-
-`invoke()` is API-compatible with Tauri's built-in invoke. It still uses JSON for argument encoding, but routes through conduit's in-process custom protocol and skips Tauri's intermediate `serde_json::Value` conversion. The result: **~2.4x faster** across all payload sizes, with zero code changes.
+`invoke()` is API-compatible with Tauri's built-in invoke. It still uses JSON for argument encoding, but routes through conduit's in-process custom protocol and deserializes directly to the target type (skipping the intermediate `serde_json::Value` conversion). Measured at ~2.4x faster across tested payload sizes.
 
 ```typescript
 import { invoke } from 'tauri-plugin-conduit';
 
-// Same API you already know from Tauri
+// Same API as Tauri's invoke()
 const result = await invoke('get_ticks', { symbol: 'AAPL' });
 ```
 
@@ -85,9 +81,9 @@ const result = await invoke('get_ticks', { symbol: 'AAPL' });
 | 1 KB | 34 us | 14.7 us | **2.3x faster** |
 | 64 KB | 2.16 ms | 867 us | **2.5x faster** |
 
-### Level 2: Binary mode -- up to 2400x faster
+### Level 2: Binary mode -- up to ~2400x faster
 
-For hot paths where every microsecond counts, switch to `invokeBinary()`. This eliminates JSON entirely -- raw bytes in, raw bytes out. The larger the payload, the bigger the win.
+`invokeBinary()` eliminates JSON entirely -- raw bytes in, raw bytes out. The improvement scales with payload size.
 
 ```typescript
 import { connect } from 'tauri-plugin-conduit';
@@ -104,7 +100,7 @@ const buf = await conduit.invokeBinary('raw_data', new Uint8Array([1, 2, 3]));
 
 ### The full picture
 
-All three paths side by side. Level 1 is free performance. Level 2 is for when you need it.
+All three paths side by side.
 
 | Payload | Tauri invoke | Level 1 (drop-in) | Level 2 (binary) |
 |---|---|---|---|
@@ -133,15 +129,20 @@ npm install tauri-plugin-conduit
 tauri::Builder::default()
     .plugin(
         tauri_plugin_conduit::init()
-            .command("ping", |_| b"pong".to_vec())
-            .command("get_ticks", handle_ticks)
+            .command_json("ping", |_: ()| "pong")
+            .command_json("get_ticks", handle_ticks)
+            .channel("telemetry")
+            .channel_ordered("events")
             .build()
     )
     .run(tauri::generate_context!())
     .unwrap();
 ```
 
-Commands receive raw bytes (`Vec<u8>`) and return raw bytes. For JSON-style usage, deserialize the payload in your handler. For binary mode, use the codec directly.
+Three handler registration methods are available:
+- `command_json(name, handler)` -- JSON in, JSON out. The handler takes a typed argument (deserialized via serde) and returns a typed response (serialized via serde). This is the closest equivalent to Tauri's `#[tauri::command]`, but limited to a single argument and no `State` injection.
+- `command_binary(name, handler)` -- binary in, binary out. The handler takes a type implementing `Decode` and returns a type implementing `Encode`. No JSON involved.
+- `command(name, handler)` -- raw `Vec<u8>` in, `Vec<u8>` out. Full control, no automatic (de)serialization.
 
 ### 3. Call from the frontend
 
@@ -153,13 +154,21 @@ const result = await invoke('get_ticks', { symbol: 'AAPL' });
 
 ## Streaming
 
-conduit includes built-in streaming from Rust to JavaScript with no polling required.
+conduit includes built-in streaming from Rust to JavaScript via ring buffers and Tauri events.
 
-**Rust side** -- register a channel and push data to it:
+Two channel types are available:
+
+- **`channel(name)`** -- lossy. When the buffer is full, the oldest frames are silently dropped. Use for telemetry, game state, and real-time data where freshness matters more than completeness.
+- **`channel_ordered(name)`** -- ordered, no drops. When the buffer is full, `push()` returns an error (backpressure). Use for transaction logs, control messages, and data that must arrive intact and in order.
+
+Both types default to 64 KB capacity. Use `channel_with_capacity()` or `channel_ordered_with_capacity()` to override.
+
+**Rust side** -- register channels and push data:
 
 ```rust
 tauri_plugin_conduit::init()
-    .channel("telemetry")               // register a streaming channel
+    .channel("telemetry")               // lossy streaming channel
+    .channel_ordered("events")          // ordered, no-drop channel
     .build()
 
 // Later, from any thread:
@@ -179,7 +188,7 @@ const unsub = await subscribe('telemetry', (buf) => {
 const buf = await drain('telemetry');
 ```
 
-Under the hood, Rust writes frames into a ring buffer and emits a lightweight event. The JS client listens for the event and fetches the data through the custom protocol. If the consumer falls behind, the oldest frames are dropped -- latest data always wins, and the producer never blocks.
+Under the hood, Rust writes frames into a ring buffer and emits a `conduit:data-available` event. The JS client listens for the event and fetches data through the custom protocol. Behavior when the buffer is full depends on the channel type: lossy channels drop the oldest frames; ordered channels return an error to the producer.
 
 ```mermaid
 flowchart LR
@@ -251,13 +260,14 @@ sequenceDiagram
     CP->>JS: ArrayBuffer
 ```
 
-**Why Level 1 is faster even though it still uses JSON:** Tauri's built-in invoke deserializes your JSON into an intermediate `serde_json::Value`, then converts that Value into your typed struct -- two steps. conduit skips the middleman and deserializes directly from JSON bytes to your struct in one step. That alone cuts the overhead in half.
+**Why Level 1 is faster even though it still uses JSON:** Tauri's built-in invoke deserializes JSON into an intermediate `serde_json::Value`, then converts that Value into your typed struct -- two deserialization steps. conduit deserializes directly from JSON bytes to the target struct in one step, and uses an in-process custom protocol instead of the webview message bridge.
 
 | | Tauri `invoke()` | conduit `invoke()` | conduit `invokeBinary()` |
 |---|---|---|---|
 | **Transport** | Webview bridge | Custom protocol (in-process) | Custom protocol (in-process) |
 | **Rust-side JSON** | bytes -> Value -> T (double parse) | bytes -> T (single parse) | No JSON |
-| **Streaming** | Manual event wiring | Built-in push + drain | Built-in push + drain |
+| **Handler registration** | `#[tauri::command]` proc macro: named params, `State<T>`, `Result<T,E>`, async | `command_json(name, fn)`: single typed arg, single return, sync only | `command_binary(name, fn)`: Encode/Decode types, sync only |
+| **Streaming** | Manual event wiring | Built-in push + drain (lossy and ordered) | Built-in push + drain (lossy and ordered) |
 | **Network surface** | None | None | None |
 
 ## Typed binary codec (optional)
@@ -292,11 +302,11 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 conduit is not a free lunch. These are real costs you should weigh before adopting it.
 
-**Handler ergonomics.** Tauri's `#[tauri::command]` gives you fully typed, auto-deserialized arguments out of the box. conduit handlers receive raw `Vec<u8>` and you own the deserialization — that's more boilerplate and more surface area for mistakes. Level 1 (`invoke()`) hides this from the frontend, but on the Rust side your handlers are lower-level than Tauri's.
+**Handler ergonomics.** Tauri's `#[tauri::command]` gives you named parameters, `Result<T, E>` return types, `State<T>` injection, and async support -- all via a proc macro. conduit's `command_json()` and `command_binary()` are simpler: they take a single typed argument and return a single typed response. No named parameters, no State injection, no async. You gain performance and control, but give up the ergonomic features Tauri provides.
 
-**Streaming is lossy by design.** The ring buffer drops the oldest frames when the consumer falls behind. This is the right behavior for telemetry, game state, and real-time data where freshness matters more than completeness. It is the **wrong** choice for anything requiring delivery guarantees — transaction logs, audit trails, ordered message queues. If you need guaranteed delivery, use Tauri events or a dedicated channel with backpressure.
+**Streaming tradeoffs.** Lossy channels (`channel()`) drop the oldest frames when the consumer falls behind. This is appropriate for telemetry, game state, and real-time data where freshness matters more than completeness. Ordered channels (`channel_ordered()`) never drop frames -- they return an error when the buffer is full, requiring the producer to handle backpressure. Neither channel type provides at-least-once or exactly-once delivery guarantees across reconnects.
 
-**Binary mode trades debuggability for speed.** JSON is human-readable — you can inspect it in devtools, log it, diff it. Raw bytes are opaque. Level 2 is powerful but makes production debugging harder. Use it on hot paths where the performance justifies it, not everywhere.
+**Binary mode trades debuggability for speed.** JSON is human-readable -- you can inspect it in devtools, log it, diff it. Raw bytes are opaque. Level 2 makes production debugging harder. Use it on hot paths where the performance difference justifies the loss of visibility.
 
 **Dependency risk.** conduit relies on Tauri's `register_uri_scheme_protocol` API. If Tauri makes breaking changes to custom protocol internals, conduit needs to be updated before your app can upgrade. This is a real coupling that Tauri's built-in IPC doesn't have.
 
