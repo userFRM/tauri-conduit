@@ -82,6 +82,30 @@ impl Router {
             .insert(name.into(), Arc::new(boxed));
     }
 
+    /// Register a fallible JSON handler for a command name.
+    ///
+    /// Like [`register_json`](Self::register_json), but the handler returns
+    /// `Result<R, E>`. On `Ok(value)`, the value is serialised to JSON. On
+    /// `Err(e)`, the error's `Display` text is returned as
+    /// [`Error::Handler`].
+    pub fn register_json_result<F, A, R, E>(&self, name: impl Into<String>, handler: F)
+    where
+        F: Fn(A) -> Result<R, E> + Send + Sync + 'static,
+        A: DeserializeOwned + 'static,
+        R: Serialize + 'static,
+        E: std::fmt::Display + 'static,
+    {
+        let boxed: BoxedHandler = Box::new(move |payload| {
+            let arg: A = serde_json::from_slice(&payload).map_err(Error::Serialize)?;
+            let result = handler(arg).map_err(|e| Error::Handler(e.to_string()))?;
+            serde_json::to_vec(&result).map_err(Error::Serialize)
+        });
+        self.handlers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name.into(), Arc::new(boxed));
+    }
+
     /// Register a binary handler for a command name.
     ///
     /// The incoming payload is decoded via the [`Decode`] trait into `A`,
@@ -233,6 +257,49 @@ mod tests {
         let table = Router::new();
         table.register_json("add", |args: (i32, i32)| args.0 + args.1);
         let err = table.call("add", b"not json!".to_vec()).unwrap_err();
+        assert!(matches!(err, Error::Serialize(_)));
+    }
+
+    // -- Fallible JSON handler tests -----------------------------------------
+
+    #[test]
+    fn register_json_result_ok() {
+        let table = Router::new();
+        table.register_json_result("divide", |args: (f64, f64)| -> Result<f64, String> {
+            if args.1 == 0.0 {
+                Err("division by zero".into())
+            } else {
+                Ok(args.0 / args.1)
+            }
+        });
+        let payload = serde_json::to_vec(&(10.0_f64, 2.0_f64)).unwrap();
+        let resp = table.call("divide", payload).unwrap();
+        let result: f64 = serde_json::from_slice(&resp).unwrap();
+        assert!((result - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn register_json_result_err() {
+        let table = Router::new();
+        table.register_json_result("divide", |args: (f64, f64)| -> Result<f64, String> {
+            if args.1 == 0.0 {
+                Err("division by zero".into())
+            } else {
+                Ok(args.0 / args.1)
+            }
+        });
+        let payload = serde_json::to_vec(&(10.0_f64, 0.0_f64)).unwrap();
+        let err = table.call("divide", payload).unwrap_err();
+        assert!(matches!(err, Error::Handler(ref msg) if msg == "division by zero"));
+    }
+
+    #[test]
+    fn register_json_result_bad_input() {
+        let table = Router::new();
+        table.register_json_result("divide", |args: (f64, f64)| -> Result<f64, String> {
+            Ok(args.0 / args.1)
+        });
+        let err = table.call("divide", b"garbage".to_vec()).unwrap_err();
         assert!(matches!(err, Error::Serialize(_)));
     }
 

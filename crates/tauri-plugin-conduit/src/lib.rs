@@ -279,6 +279,40 @@ impl PluginBuilder {
         self
     }
 
+    /// Typed JSON handler that returns `Result<R, E>`.
+    ///
+    /// Like [`command_json`](Self::command_json), but the handler returns
+    /// `Result<R, E>` where `E: Display`. On success, `R` is serialized to
+    /// JSON. On error, the error's `Display` text is returned to the caller.
+    ///
+    /// Use with `#[conduit_command]` for Tauri-style named parameters:
+    ///
+    /// ```rust,ignore
+    /// use conduit_derive::conduit_command;
+    ///
+    /// #[conduit_command]
+    /// fn divide(a: f64, b: f64) -> Result<f64, String> {
+    ///     if b == 0.0 { Err("division by zero".into()) }
+    ///     else { Ok(a / b) }
+    /// }
+    ///
+    /// // Registration:
+    /// .command_json_result("divide", divide)
+    /// ```
+    pub fn command_json_result<F, A, R, E>(mut self, name: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(A) -> Result<R, E> + Send + Sync + 'static,
+        A: serde::de::DeserializeOwned + 'static,
+        R: serde::Serialize + 'static,
+        E: std::fmt::Display + 'static,
+    {
+        let name = name.into();
+        self.commands.push(Box::new(move |table: &Router| {
+            table.register_json_result(name, handler);
+        }));
+        self
+    }
+
     // -- Binary handlers (Level 2) ------------------------------------------
 
     /// Register a typed binary command handler.

@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-//! Derive macros for conduit-core's `Encode` and `Decode` traits.
+//! Derive macros for conduit-core's `Encode` and `Decode` traits, plus
+//! the `#[conduit_command]` attribute macro for Tauri-style named-parameter
+//! handlers.
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, FnArg, ItemFn, Pat, parse_macro_input};
 
 /// Derive the `Encode` trait for a struct with named fields.
 ///
@@ -180,6 +182,140 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 #(#decode_stmts)*
                 Some((Self { #(#field_names),* }, __offset))
             }
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// #[conduit_command] attribute macro
+// ---------------------------------------------------------------------------
+
+/// Attribute macro that transforms a function with named parameters into a
+/// handler compatible with conduit's `command_json` / `command_json_result`
+/// registration methods.
+///
+/// This provides Tauri-style ergonomics: write a function with named
+/// parameters, and the macro generates a hidden args struct with
+/// `#[derive(Deserialize)]` so the frontend can send `{ "name": "Alice",
+/// "age": 30 }` as a JSON object with named fields.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use conduit_derive::conduit_command;
+///
+/// // Named parameters — frontend sends { "name": "Alice", "greeting": "Hi" }
+/// #[conduit_command]
+/// fn greet(name: String, greeting: String) -> String {
+///     format!("{greeting}, {name}!")
+/// }
+///
+/// // Result return — errors become conduit::Error::Handler
+/// #[conduit_command]
+/// fn divide(a: f64, b: f64) -> Result<f64, String> {
+///     if b == 0.0 { Err("division by zero".into()) }
+///     else { Ok(a / b) }
+/// }
+///
+/// // Register with the plugin builder:
+/// tauri_plugin_conduit::init()
+///     .command_json("greet", greet)
+///     .command_json_result("divide", divide)
+///     .build()
+/// ```
+///
+/// For zero-parameter functions, the macro generates a handler that takes
+/// `()` (unit), compatible with `command_json("name", handler)` where the
+/// frontend sends an empty body or `null`.
+#[proc_macro_attribute]
+pub fn conduit_command(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let func = parse_macro_input!(item as ItemFn);
+    match impl_conduit_command(func) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Convert a snake_case string to PascalCase.
+fn pascal_case(s: &str) -> String {
+    s.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(c) => {
+                    let upper: String = c.to_uppercase().collect();
+                    upper + chars.as_str()
+                }
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+/// Implementation of the `#[conduit_command]` attribute macro.
+fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
+    let fn_name = &func.sig.ident;
+    let fn_vis = &func.vis;
+    let fn_output = &func.sig.output;
+    let fn_attrs = &func.attrs;
+    let fn_stmts = &func.block.stmts;
+
+    // Reject self receivers.
+    for arg in &func.sig.inputs {
+        if matches!(arg, FnArg::Receiver(_)) {
+            return Err(syn::Error::new_spanned(
+                arg,
+                "#[conduit_command] cannot be used on methods with `self`",
+            ));
+        }
+    }
+
+    // Collect parameter names and types.
+    let mut param_names: Vec<&syn::Ident> = Vec::new();
+    let mut param_types: Vec<&syn::Type> = Vec::new();
+
+    for arg in &func.sig.inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                param_names.push(&pat_ident.ident);
+                param_types.push(&*pat_type.ty);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    &pat_type.pat,
+                    "#[conduit_command] requires named parameters (e.g. `name: String`)",
+                ));
+            }
+        }
+    }
+
+    // Zero parameters: generate fn(()) handler.
+    if param_names.is_empty() {
+        return Ok(quote! {
+            #(#fn_attrs)*
+            #fn_vis fn #fn_name(_: ()) #fn_output {
+                #(#fn_stmts)*
+            }
+        });
+    }
+
+    // Generate args struct name: __Conduit{FnName}Args.
+    let struct_name = syn::Ident::new(
+        &format!("__Conduit{}Args", pascal_case(&fn_name.to_string())),
+        fn_name.span(),
+    );
+
+    Ok(quote! {
+        #[doc(hidden)]
+        #[derive(conduit_core::serde::Deserialize)]
+        #[serde(crate = "conduit_core::serde")]
+        #fn_vis struct #struct_name {
+            #(#param_names: #param_types),*
+        }
+
+        #(#fn_attrs)*
+        #fn_vis fn #fn_name(__args: #struct_name) #fn_output {
+            let #struct_name { #(#param_names),* } = __args;
+            #(#fn_stmts)*
         }
     })
 }

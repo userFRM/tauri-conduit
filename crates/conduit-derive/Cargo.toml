@@ -21,3 +21,4 @@ proc-macro2 = "1"
 
 [dev-dependencies]
 conduit-core = { version = "1.0.0", path = "../conduit-core" }
+serde_json = "1"

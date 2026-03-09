@@ -21,3 +21,6 @@ pub use error::Error;
 pub use queue::Queue;
 pub use ringbuf::RingBuffer;
 pub use router::Router;
+
+#[doc(hidden)]
+pub use serde;

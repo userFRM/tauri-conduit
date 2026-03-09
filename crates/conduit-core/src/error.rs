@@ -21,6 +21,8 @@ pub enum Error {
     /// A reliable channel's byte budget has been reached and the frame was
     /// rejected (no data was lost).
     ChannelFull,
+    /// A command handler returned an application-level error.
+    Handler(String),
 }
 
 impl fmt::Display for Error {
@@ -34,6 +36,7 @@ impl fmt::Display for Error {
                 write!(f, "payload too large: {len} bytes exceeds u32::MAX")
             }
             Self::ChannelFull => f.write_str("channel full: byte limit reached"),
+            Self::Handler(msg) => write!(f, "handler error: {msg}"),
         }
     }
 }
@@ -107,5 +110,16 @@ mod tests {
     #[test]
     fn error_source_channel_full() {
         assert!(std::error::Error::source(&Error::ChannelFull).is_none());
+    }
+
+    #[test]
+    fn display_handler_error() {
+        let err = Error::Handler("division by zero".into());
+        assert_eq!(err.to_string(), "handler error: division by zero");
+    }
+
+    #[test]
+    fn error_source_handler() {
+        assert!(std::error::Error::source(&Error::Handler("x".into())).is_none());
     }
 }

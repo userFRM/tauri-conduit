@@ -1,5 +1,5 @@
-use conduit_core::{Decode, Encode};
-use conduit_derive::{Decode, Encode};
+use conduit_core::{Decode, Encode, Router};
+use conduit_derive::{Decode, Encode, conduit_command};
 
 // ---------------------------------------------------------------------------
 // Test structs
@@ -315,4 +315,91 @@ fn field_named_data_does_not_shadow() {
     assert_eq!(consumed, buf.len());
     // Verify the tag field (after data) decoded correctly — this was the bug.
     assert_eq!(decoded.tag, 42);
+}
+
+// ---------------------------------------------------------------------------
+// 9. #[conduit_command] attribute macro
+// ---------------------------------------------------------------------------
+
+#[conduit_command]
+fn greet(name: String, greeting: String) -> String {
+    format!("{greeting}, {name}!")
+}
+
+#[test]
+fn conduit_command_named_params() {
+    let router = Router::new();
+    router.register_json("greet", greet);
+
+    // Frontend sends { "name": "Alice", "greeting": "Hello" }
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "name": "Alice",
+        "greeting": "Hello"
+    }))
+    .unwrap();
+    let resp = router.call("greet", payload).unwrap();
+    let result: String = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(result, "Hello, Alice!");
+}
+
+#[conduit_command]
+fn divide(a: f64, b: f64) -> Result<f64, String> {
+    if b == 0.0 {
+        Err("division by zero".into())
+    } else {
+        Ok(a / b)
+    }
+}
+
+#[test]
+fn conduit_command_result_ok() {
+    let router = Router::new();
+    router.register_json_result("divide", divide);
+
+    let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 2.0 })).unwrap();
+    let resp = router.call("divide", payload).unwrap();
+    let result: f64 = serde_json::from_slice(&resp).unwrap();
+    assert!((result - 5.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn conduit_command_result_err() {
+    let router = Router::new();
+    router.register_json_result("divide", divide);
+
+    let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 0.0 })).unwrap();
+    let err = router.call("divide", payload).unwrap_err();
+    assert_eq!(err.to_string(), "handler error: division by zero");
+}
+
+#[conduit_command]
+fn ping() -> String {
+    "pong".to_string()
+}
+
+#[test]
+fn conduit_command_zero_params() {
+    let router = Router::new();
+    router.register_json("ping", ping);
+
+    let payload = serde_json::to_vec(&()).unwrap(); // null
+    let resp = router.call("ping", payload).unwrap();
+    let result: String = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(result, "pong");
+}
+
+#[conduit_command]
+fn echo_name(name: String) -> String {
+    name
+}
+
+#[test]
+fn conduit_command_single_param() {
+    let router = Router::new();
+    router.register_json("echo_name", echo_name);
+
+    let payload = serde_json::to_vec(&serde_json::json!({ "name": "test" })).unwrap();
+    let resp = router.call("echo_name", payload).unwrap();
+    let result: String = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(result, "test");
 }
