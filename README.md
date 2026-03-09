@@ -288,6 +288,20 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 - **CSP safe** -- no Content Security Policy exceptions required.
 - **Panic isolation** -- if a handler panics, conduit catches it and returns a clean error. The app keeps running.
 
+## Tradeoffs
+
+conduit is not a free lunch. These are real costs you should weigh before adopting it.
+
+**Handler ergonomics.** Tauri's `#[tauri::command]` gives you fully typed, auto-deserialized arguments out of the box. conduit handlers receive raw `Vec<u8>` and you own the deserialization — that's more boilerplate and more surface area for mistakes. Level 1 (`invoke()`) hides this from the frontend, but on the Rust side your handlers are lower-level than Tauri's.
+
+**Streaming is lossy by design.** The ring buffer drops the oldest frames when the consumer falls behind. This is the right behavior for telemetry, game state, and real-time data where freshness matters more than completeness. It is the **wrong** choice for anything requiring delivery guarantees — transaction logs, audit trails, ordered message queues. If you need guaranteed delivery, use Tauri events or a dedicated channel with backpressure.
+
+**Binary mode trades debuggability for speed.** JSON is human-readable — you can inspect it in devtools, log it, diff it. Raw bytes are opaque. Level 2 is powerful but makes production debugging harder. Use it on hot paths where the performance justifies it, not everywhere.
+
+**Dependency risk.** conduit relies on Tauri's `register_uri_scheme_protocol` API. If Tauri makes breaking changes to custom protocol internals, conduit needs to be updated before your app can upgrade. This is a real coupling that Tauri's built-in IPC doesn't have.
+
+**When to just use Tauri's built-in IPC:** If your app is mostly UI-driven (button clicks, form submissions, occasional data fetches), Tauri's invoke is fast enough and gives you better ergonomics. conduit is for the cases where IPC is measurably on your critical path.
+
 ## Project layout
 
 ```
