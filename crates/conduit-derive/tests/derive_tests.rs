@@ -1,5 +1,5 @@
 use conduit_core::{Decode, Encode, Router};
-use conduit_derive::{Decode, Encode, conduit_command};
+use conduit_derive::{Decode, Encode, command};
 
 // ---------------------------------------------------------------------------
 // Test structs
@@ -318,10 +318,10 @@ fn field_named_data_does_not_shadow() {
 }
 
 // ---------------------------------------------------------------------------
-// 9. #[conduit_command] attribute macro
+// 9. #[command] attribute macro
 // ---------------------------------------------------------------------------
 
-#[conduit_command]
+#[command]
 fn greet(name: String, greeting: String) -> String {
     format!("{greeting}, {name}!")
 }
@@ -342,7 +342,7 @@ fn conduit_command_named_params() {
     assert_eq!(result, "Hello, Alice!");
 }
 
-#[conduit_command]
+#[command]
 fn divide(a: f64, b: f64) -> Result<f64, String> {
     if b == 0.0 {
         Err("division by zero".into())
@@ -372,7 +372,7 @@ fn conduit_command_result_err() {
     assert_eq!(err.to_string(), "handler error: division by zero");
 }
 
-#[conduit_command]
+#[command]
 fn ping() -> String {
     "pong".to_string()
 }
@@ -388,7 +388,7 @@ fn conduit_command_zero_params() {
     assert_eq!(result, "pong");
 }
 
-#[conduit_command]
+#[command]
 fn echo_name(name: String) -> String {
     name
 }

@@ -11,11 +11,17 @@
 //! ## Usage
 //!
 //! ```rust,ignore
+//! use tauri_plugin_conduit::command;
+//!
+//! #[command]
+//! fn greet(name: String) -> String {
+//!     format!("Hello, {name}!")
+//! }
+//!
 //! tauri::Builder::default()
 //!     .plugin(
 //!         tauri_plugin_conduit::init()
-//!             .command("ping", |_| b"pong".to_vec())
-//!             .command_json("greet", |name: String| format!("Hello, {name}!"))
+//!             .command_json("greet", greet)
 //!             .channel("telemetry")
 //!             .channel_ordered("events")
 //!             .build()
@@ -23,6 +29,21 @@
 //!     .run(tauri::generate_context!())
 //!     .unwrap();
 //! ```
+
+/// Re-export the `#[command]` attribute macro from `conduit-derive`.
+///
+/// This is conduit's equivalent of `#[tauri::command]`. Use it for
+/// named-parameter handlers:
+///
+/// ```rust,ignore
+/// use tauri_plugin_conduit::command;
+///
+/// #[command]
+/// fn greet(name: String, greeting: String) -> String {
+///     format!("{greeting}, {name}!")
+/// }
+/// ```
+pub use conduit_derive::command;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -538,13 +559,18 @@ impl Default for PluginBuilder {
 /// This is the main entry point for using the conduit Tauri plugin:
 ///
 /// ```rust,ignore
+/// use tauri_plugin_conduit::command;
+///
+/// #[command]
+/// fn greet(name: String) -> String {
+///     format!("Hello, {name}!")
+/// }
+///
 /// tauri::Builder::default()
 ///     .plugin(
 ///         tauri_plugin_conduit::init()
-///             .command("ping", |_| b"pong".to_vec())
-///             .command_json("greet", |name: String| format!("Hello, {name}!"))
+///             .command_json("greet", greet)
 ///             .channel("telemetry")
-///             .channel_ordered("events")
 ///             .build()
 ///     )
 ///     .run(tauri::generate_context!())

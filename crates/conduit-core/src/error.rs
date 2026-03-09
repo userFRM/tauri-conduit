@@ -11,7 +11,7 @@ pub enum Error {
     /// The client failed token authentication.
     AuthFailed,
     /// JSON serialisation / deserialisation error.
-    Serialize(serde_json::Error),
+    Serialize(sonic_rs::Error),
     /// An unrecognised command name was received.
     UnknownCommand(String),
     /// A binary frame could not be decoded.
@@ -50,8 +50,8 @@ impl std::error::Error for Error {
     }
 }
 
-impl From<serde_json::Error> for Error {
-    fn from(e: serde_json::Error) -> Self {
+impl From<sonic_rs::Error> for Error {
+    fn from(e: sonic_rs::Error) -> Self {
         Self::Serialize(e)
     }
 }
@@ -73,8 +73,8 @@ mod tests {
     }
 
     #[test]
-    fn from_serde_json() {
-        let json_err = serde_json::from_str::<String>("not json").unwrap_err();
+    fn from_sonic_rs() {
+        let json_err = sonic_rs::from_str::<String>("not json").unwrap_err();
         let err: Error = json_err.into();
         assert!(matches!(err, Error::Serialize(_)));
     }

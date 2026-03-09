@@ -72,9 +72,9 @@ impl Router {
         R: Serialize + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |payload| {
-            let arg: A = serde_json::from_slice(&payload).map_err(Error::Serialize)?;
+            let arg: A = sonic_rs::from_slice(&payload).map_err(Error::Serialize)?;
             let result = handler(arg);
-            serde_json::to_vec(&result).map_err(Error::Serialize)
+            sonic_rs::to_vec(&result).map_err(Error::Serialize)
         });
         self.handlers
             .write()
@@ -96,9 +96,9 @@ impl Router {
         E: std::fmt::Display + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |payload| {
-            let arg: A = serde_json::from_slice(&payload).map_err(Error::Serialize)?;
+            let arg: A = sonic_rs::from_slice(&payload).map_err(Error::Serialize)?;
             let result = handler(arg).map_err(|e| Error::Handler(e.to_string()))?;
-            serde_json::to_vec(&result).map_err(Error::Serialize)
+            sonic_rs::to_vec(&result).map_err(Error::Serialize)
         });
         self.handlers
             .write()
@@ -246,9 +246,9 @@ mod tests {
     fn register_json_roundtrip() {
         let table = Router::new();
         table.register_json("add", |args: (i32, i32)| args.0 + args.1);
-        let payload = serde_json::to_vec(&(3, 4)).unwrap();
+        let payload = sonic_rs::to_vec(&(3, 4)).unwrap();
         let resp = table.call("add", payload).unwrap();
-        let result: i32 = serde_json::from_slice(&resp).unwrap();
+        let result: i32 = sonic_rs::from_slice(&resp).unwrap();
         assert_eq!(result, 7);
     }
 
@@ -272,9 +272,9 @@ mod tests {
                 Ok(args.0 / args.1)
             }
         });
-        let payload = serde_json::to_vec(&(10.0_f64, 2.0_f64)).unwrap();
+        let payload = sonic_rs::to_vec(&(10.0_f64, 2.0_f64)).unwrap();
         let resp = table.call("divide", payload).unwrap();
-        let result: f64 = serde_json::from_slice(&resp).unwrap();
+        let result: f64 = sonic_rs::from_slice(&resp).unwrap();
         assert!((result - 5.0).abs() < f64::EPSILON);
     }
 
@@ -288,7 +288,7 @@ mod tests {
                 Ok(args.0 / args.1)
             }
         });
-        let payload = serde_json::to_vec(&(10.0_f64, 0.0_f64)).unwrap();
+        let payload = sonic_rs::to_vec(&(10.0_f64, 0.0_f64)).unwrap();
         let err = table.call("divide", payload).unwrap_err();
         assert!(matches!(err, Error::Handler(ref msg) if msg == "division by zero"));
     }

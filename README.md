@@ -124,17 +124,17 @@ npm install tauri-plugin-conduit
 
 ### 2. Register your commands (Rust)
 
-Use `#[conduit_command]` for Tauri-style named parameters:
+Use `#[command]` for Tauri-style named parameters:
 
 ```rust
-use conduit_derive::conduit_command;
+use tauri_plugin_conduit::command;
 
-#[conduit_command]
+#[command]
 fn get_ticks(symbol: String, limit: u32) -> Vec<Tick> {
     db::query_ticks(&symbol, limit)
 }
 
-#[conduit_command]
+#[command]
 fn place_order(symbol: String, qty: f64) -> Result<OrderId, String> {
     broker::submit(&symbol, qty).map_err(|e| e.to_string())
 }
@@ -158,7 +158,7 @@ tauri::Builder::default()
 ```
 
 Four handler registration methods are available:
-- `command_json(name, handler)` -- JSON in, JSON out. Pair with `#[conduit_command]` for named parameters.
+- `command_json(name, handler)` -- JSON in, JSON out. Pair with `#[command]` for named parameters.
 - `command_json_result(name, handler)` -- same as above, but the handler returns `Result<R, E>`. Errors are propagated to the caller.
 - `command_binary(name, handler)` -- binary in, binary out. The handler takes a type implementing `Decode` and returns a type implementing `Encode`. No JSON involved.
 - `command(name, handler)` -- raw `Vec<u8>` in, `Vec<u8>` out. Full control, no automatic (de)serialization.
@@ -279,13 +279,13 @@ sequenceDiagram
     CP->>JS: ArrayBuffer
 ```
 
-**Why Level 1 is faster even though it still uses JSON:** Tauri's built-in invoke deserializes JSON into an intermediate `serde_json::Value`, then converts that Value into your typed struct -- two deserialization steps. conduit deserializes directly from JSON bytes to the target struct in one step, and uses an in-process custom protocol instead of the webview message bridge.
+**Why Level 1 is faster even though it still uses JSON:** Tauri's built-in invoke deserializes JSON into an intermediate `serde_json::Value`, then converts that Value into your typed struct -- two deserialization steps. conduit uses [sonic-rs](https://github.com/cloudwego/sonic-rs) (SIMD-accelerated JSON) to deserialize directly from bytes to the target struct in one step, and routes through an in-process custom protocol instead of the webview message bridge.
 
 | | Tauri `invoke()` | conduit `invoke()` | conduit `invokeBinary()` |
 |---|---|---|---|
 | **Transport** | Webview bridge | Custom protocol (in-process) | Custom protocol (in-process) |
-| **Rust-side JSON** | bytes -> Value -> T (double parse) | bytes -> T (single parse) | No JSON |
-| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[conduit_command]` + `command_json`: named params, `Result<T,E>`, sync only, no `State<T>` | `command_binary(name, fn)`: Encode/Decode types, sync only |
+| **Rust-side JSON** | serde_json: bytes -> Value -> T (double parse) | sonic-rs: bytes -> T (single parse, SIMD) | No JSON |
+| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[command]` + `command_json`: named params, `Result<T,E>`, sync only, no `State<T>` | `command_binary(name, fn)`: Encode/Decode types, sync only |
 | **Streaming** | Manual event wiring | Built-in push + drain (lossy and ordered) | Built-in push + drain (lossy and ordered) |
 | **Network surface** | None | None | None |
 
@@ -321,15 +321,15 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 conduit is not a free lunch. These are real costs you should weigh before adopting it.
 
-**Handler ergonomics.** conduit provides `#[conduit_command]` for named parameters and `Result<T, E>` returns -- similar to Tauri's `#[tauri::command]`. However, conduit handlers are synchronous only (no async) and do not support `State<T>` injection. If you need managed state, pass it through your handler manually.
+**Handler ergonomics.** conduit provides `#[command]` for named parameters and `Result<T, E>` returns -- similar to `#[tauri::command]`. However, conduit handlers are synchronous only (no async) and do not support `State<T>` injection. If you need managed state, pass it through your handler manually.
 
-**Streaming tradeoffs.** Lossy channels (`channel()`) drop the oldest frames when the consumer falls behind. This is appropriate for telemetry, game state, and real-time data where freshness matters more than completeness. Ordered channels (`channel_ordered()`) never drop frames -- they return an error when the buffer is full, requiring the producer to handle backpressure. Neither channel type provides at-least-once or exactly-once delivery guarantees across reconnects.
+**Streaming tradeoffs.** Lossy channels (`channel()`) drop the oldest frames when the consumer falls behind. Ordered channels (`channel_ordered()`) never drop frames but return an error when full (backpressure). Neither channel type provides at-least-once or exactly-once delivery guarantees across reconnects.
 
 **Binary mode trades debuggability for speed.** JSON is human-readable -- you can inspect it in devtools, log it, diff it. Raw bytes are opaque. Level 2 makes production debugging harder. Use it on hot paths where the performance difference justifies the loss of visibility.
 
 **Dependency risk.** conduit relies on Tauri's `register_uri_scheme_protocol` API. If Tauri makes breaking changes to custom protocol internals, conduit needs to be updated before your app can upgrade. This is a real coupling that Tauri's built-in IPC doesn't have.
 
-**When to just use Tauri's built-in IPC:** If your app is mostly UI-driven (button clicks, form submissions, occasional data fetches), Tauri's invoke is fast enough and gives you better ergonomics. conduit is for the cases where IPC is measurably on your critical path.
+**When to just use Tauri's built-in IPC:** If your app is mostly UI-driven (button clicks, form submissions, occasional data fetches), Tauri's invoke is sufficient. conduit is for the cases where IPC is measurably on your critical path.
 
 ## Project layout
 
@@ -337,7 +337,7 @@ conduit is not a free lunch. These are real costs you should weigh before adopti
 tauri-conduit/
   crates/
     conduit-core/              Core library (codec, router, ring buffer)
-    conduit-derive/            Proc macros (Encode, Decode, #[conduit_command])
+    conduit-derive/            Proc macros (Encode, Decode, #[command])
     tauri-plugin-conduit/      Tauri v2 plugin
   packages/
     tauri-plugin-conduit/      TypeScript client (tauri-plugin-conduit)

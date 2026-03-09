@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-//! Derive macros for conduit-core's `Encode` and `Decode` traits, plus
-//! the `#[conduit_command]` attribute macro for Tauri-style named-parameter
-//! handlers.
+//! Proc macros for conduit: `#[derive(Encode, Decode)]` for binary codecs
+//! and `#[command]` for Tauri-style named-parameter handlers.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -194,24 +193,24 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 /// handler compatible with conduit's `command_json` / `command_json_result`
 /// registration methods.
 ///
-/// This provides Tauri-style ergonomics: write a function with named
-/// parameters, and the macro generates a hidden args struct with
+/// This is conduit's equivalent of `#[tauri::command]`: write a function with
+/// named parameters, and the macro generates a hidden args struct with
 /// `#[derive(Deserialize)]` so the frontend can send `{ "name": "Alice",
 /// "age": 30 }` as a JSON object with named fields.
 ///
 /// # Usage
 ///
 /// ```rust,ignore
-/// use conduit_derive::conduit_command;
+/// use tauri_plugin_conduit::command;
 ///
 /// // Named parameters — frontend sends { "name": "Alice", "greeting": "Hi" }
-/// #[conduit_command]
+/// #[command]
 /// fn greet(name: String, greeting: String) -> String {
 ///     format!("{greeting}, {name}!")
 /// }
 ///
 /// // Result return — errors become conduit::Error::Handler
-/// #[conduit_command]
+/// #[command]
 /// fn divide(a: f64, b: f64) -> Result<f64, String> {
 ///     if b == 0.0 { Err("division by zero".into()) }
 ///     else { Ok(a / b) }
@@ -228,7 +227,7 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 /// `()` (unit), compatible with `command_json("name", handler)` where the
 /// frontend sends an empty body or `null`.
 #[proc_macro_attribute]
-pub fn conduit_command(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
     match impl_conduit_command(func) {
         Ok(tokens) => tokens.into(),
