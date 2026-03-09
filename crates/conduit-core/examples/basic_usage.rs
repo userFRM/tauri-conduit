@@ -44,7 +44,7 @@ fn main() {
     // Register a simple handler that takes no payload.
     table.register_simple("version", || {
         let mut out = Vec::new();
-        String::from("conduit-core 0.1.0").encode(&mut out);
+        String::from("conduit-core 1.0.0").encode(&mut out);
         out
     });
 
