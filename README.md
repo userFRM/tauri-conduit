@@ -17,6 +17,43 @@ Swap one import and your Tauri v2 app gets **2.4x faster IPC** through an in-pro
 
 ---
 
+## Architecture
+
+```mermaid
+graph TB
+    subgraph Frontend["Frontend (Webview)"]
+        INV["invoke()  — JSON, drop-in"]
+        BIN["invokeBinary()  — raw bytes"]
+        SUB["subscribe() / drain()"]
+    end
+
+    subgraph Protocol["conduit:// Custom Protocol  (in-process)"]
+        AUTH["Auth key validation"]
+        ROUTE["Router"]
+    end
+
+    subgraph Backend["Backend (Rust)"]
+        CMD["Command handlers"]
+        RB["Ring Buffer"]
+    end
+
+    INV -- "fetch conduit://invoke/" --> AUTH
+    BIN -- "fetch conduit://invoke/" --> AUTH
+    AUTH --> ROUTE
+    ROUTE --> CMD
+    CMD --> ROUTE
+    RB -- "conduit:data-available event" --> SUB
+    SUB -- "fetch conduit://drain/" --> RB
+    CMD -. "push()" .-> RB
+
+    style Protocol fill:#1e293b,stroke:#475569,color:#f8fafc
+    style AUTH fill:#ef4444,stroke:#dc2626,color:#fff
+    style ROUTE fill:#3b82f6,stroke:#2563eb,color:#fff
+    style RB fill:#f59e0b,stroke:#d97706,color:#000
+```
+
+---
+
 ## "Does a Tauri app really need this?"
 
 If your app sends a button click and gets a string back, probably not -- Tauri's built-in IPC is fine for that.
@@ -144,9 +181,75 @@ const buf = await drain('telemetry');
 
 Under the hood, Rust writes frames into a ring buffer and emits a lightweight event. The JS client listens for the event and fetches the data through the custom protocol. If the consumer falls behind, the oldest frames are dropped -- latest data always wins, and the producer never blocks.
 
+```mermaid
+flowchart LR
+    subgraph Rust
+        P["Any thread"] -- "push(channel, bytes)" --> RB["Ring Buffer"]
+        RB -- "emits" --> EV["conduit:data-available"]
+    end
+
+    subgraph Frontend
+        EV -- "event listener" --> S["subscribe() callback"]
+        S -- "fetch conduit://drain/" --> RB
+        RB -- "binary frames" --> S
+    end
+
+    style RB fill:#f59e0b,stroke:#d97706,color:#000
+    style EV fill:#3b82f6,stroke:#2563eb,color:#fff
+```
+
 ## How it works
 
 conduit registers a `conduit://` custom protocol with Tauri. When your frontend calls `invoke()`, it uses `fetch("conduit://...")` instead of going through the webview message bridge. The request stays in the same process -- no network, no IPC pipes.
+
+### Tauri's built-in IPC path
+
+```mermaid
+sequenceDiagram
+    participant JS as Frontend (JS)
+    participant WV as Webview Bridge
+    participant RT as Tauri Runtime
+    participant H as Handler
+
+    JS->>WV: JSON.stringify(args)
+    WV->>RT: postMessage (IPC)
+    RT->>RT: JSON bytes → serde_json::Value
+    RT->>H: Value → T (second deserialize)
+    H->>RT: T → Value (serialize)
+    RT->>RT: Value → JSON bytes
+    RT->>WV: IPC response
+    WV->>JS: JSON.parse(result)
+```
+
+### conduit Level 1 (drop-in) -- same JSON, fewer steps
+
+```mermaid
+sequenceDiagram
+    participant JS as Frontend (JS)
+    participant CP as conduit:// Protocol
+    participant H as Handler
+
+    JS->>CP: fetch("conduit://…", JSON body)
+    Note over CP: JSON bytes → T (single step)
+    CP->>H: Typed struct directly
+    H->>CP: T → JSON bytes
+    CP->>JS: Response body
+```
+
+### conduit Level 2 (binary) -- no JSON anywhere
+
+```mermaid
+sequenceDiagram
+    participant JS as Frontend (JS)
+    participant CP as conduit:// Protocol
+    participant H as Handler
+
+    JS->>CP: fetch("conduit://…", raw bytes)
+    Note over CP: Zero-copy passthrough
+    CP->>H: Raw bytes (Vec&lt;u8&gt;)
+    H->>CP: Raw bytes
+    CP->>JS: ArrayBuffer
+```
 
 **Why Level 1 is faster even though it still uses JSON:** Tauri's built-in invoke deserializes your JSON into an intermediate `serde_json::Value`, then converts that Value into your typed struct -- two steps. conduit skips the middleman and deserializes directly from JSON bytes to your struct in one step. That alone cuts the overhead in half.
 
