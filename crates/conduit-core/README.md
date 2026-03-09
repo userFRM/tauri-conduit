@@ -1,5 +1,10 @@
 # conduit-core
 
+[![Crates.io](https://img.shields.io/crates/v/conduit-core.svg)](https://crates.io/crates/conduit-core)
+[![docs.rs](https://docs.rs/conduit-core/badge.svg)](https://docs.rs/conduit-core)
+[![CI](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates/l/conduit-core.svg)](https://github.com/userFRM/tauri-conduit#license)
+
 Binary IPC core for Tauri v2: codec, dispatch table, and ring buffer.
 
 Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace.
@@ -31,8 +36,8 @@ cargo bench -- comparison   # JSON vs binary codec
 cargo bench                 # all benchmarks
 ```
 
-See the [workspace README](https://github.com/userFRM/tauri-conduit) for full documentation.
+See the [workspace README](https://github.com/userFRM/tauri-conduit) for full documentation and benchmark numbers.
 
 ## License
 
-Licensed under either of [MIT](../../LICENSE-MIT) or [Apache-2.0](../../LICENSE-APACHE) at your option.
+Licensed under either of [MIT](https://github.com/userFRM/tauri-conduit/blob/master/LICENSE-MIT) or [Apache-2.0](https://github.com/userFRM/tauri-conduit/blob/master/LICENSE-APACHE) at your option.
