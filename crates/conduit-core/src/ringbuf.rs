@@ -50,6 +50,7 @@ struct Inner {
 }
 
 impl Inner {
+    /// Create an empty inner buffer with the given byte budget.
     fn new(capacity: usize) -> Self {
         Self {
             frames: VecDeque::new(),

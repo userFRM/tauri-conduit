@@ -9,6 +9,7 @@ keywords = ["tauri", "ipc", "binary", "codec", "ringbuf"]
 categories = ["encoding", "data-structures", "gui"]
 repository = "https://github.com/userFRM/tauri-conduit"
 homepage = "https://github.com/userFRM/tauri-conduit"
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

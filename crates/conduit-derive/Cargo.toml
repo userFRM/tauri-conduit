@@ -9,6 +9,7 @@ keywords = ["tauri", "ipc", "derive", "binary", "codec"]
 categories = ["gui", "network-programming", "development-tools::procedural-macro-helpers"]
 repository = "https://github.com/userFRM/tauri-conduit"
 homepage = "https://github.com/userFRM/tauri-conduit"
+readme = "README.md"
 
 [lib]
 proc-macro = true

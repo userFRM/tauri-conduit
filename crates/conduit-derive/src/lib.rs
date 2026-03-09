@@ -85,6 +85,8 @@ fn named_fields(input: &DeriveInput) -> syn::Result<&syn::FieldsNamed> {
     }
 }
 
+/// Reject generic structs with a compile error — wire encoding requires
+/// a fixed, concrete layout.
 fn reject_generics(input: &DeriveInput) -> syn::Result<()> {
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -95,6 +97,8 @@ fn reject_generics(input: &DeriveInput) -> syn::Result<()> {
     Ok(())
 }
 
+/// Generate the `WireEncode` impl: encodes each named field in declaration
+/// order and sums their `wire_size()` for the total.
 fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     reject_generics(input)?;
     let name = &input.ident;
@@ -144,6 +148,8 @@ fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
     })
 }
 
+/// Generate the `WireDecode` impl: decodes each named field in declaration
+/// order, tracking the cumulative byte offset through the input slice.
 fn impl_wire_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     reject_generics(input)?;
     let name = &input.ident;

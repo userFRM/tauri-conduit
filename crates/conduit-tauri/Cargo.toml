@@ -9,6 +9,7 @@ keywords = ["tauri", "ipc", "plugin", "binary"]
 categories = ["gui", "web-programming"]
 repository = "https://github.com/userFRM/tauri-conduit"
 homepage = "https://github.com/userFRM/tauri-conduit"
+readme = "README.md"
 
 [dependencies]
 conduit-core = { version = "0.1.0", path = "../conduit-core" }
