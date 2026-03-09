@@ -1,10 +1,8 @@
 # tauri-conduit
 
 [![CI](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml)
-[![conduit-core](https://img.shields.io/crates/v/conduit-core.svg?label=conduit-core)](https://crates.io/crates/conduit-core)
-[![conduit-derive](https://img.shields.io/crates/v/conduit-derive.svg?label=conduit-derive)](https://crates.io/crates/conduit-derive)
-[![tauri-plugin-conduit](https://img.shields.io/crates/v/tauri-plugin-conduit.svg?label=tauri-plugin-conduit)](https://crates.io/crates/tauri-plugin-conduit)
-[![docs.rs](https://docs.rs/conduit-core/badge.svg)](https://docs.rs/conduit-core)
+[![crates.io](https://img.shields.io/crates/v/tauri-plugin-conduit.svg)](https://crates.io/crates/tauri-plugin-conduit)
+[![docs.rs](https://docs.rs/tauri-plugin-conduit/badge.svg)](https://docs.rs/tauri-plugin-conduit)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 

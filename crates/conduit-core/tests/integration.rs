@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::thread;
 
 use conduit_core::{
-    Error, RingBuffer, Router, FRAME_HEADER_SIZE, FrameHeader, MsgType,
-    PROTOCOL_VERSION, Decode, Encode, frame_unpack, frame_pack,
+    Decode, Encode, Error, FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, RingBuffer,
+    Router, frame_pack, frame_unpack,
 };
 
 // ---------------------------------------------------------------------------

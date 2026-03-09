@@ -10,8 +10,8 @@
 //! Run with: cargo run --example derive_usage -p conduit-core
 
 use conduit_core::{
-    FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, Decode, Encode,
-    frame_unpack, frame_pack,
+    Decode, Encode, FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, frame_pack,
+    frame_unpack,
 };
 use conduit_derive::{Decode, Encode};
 

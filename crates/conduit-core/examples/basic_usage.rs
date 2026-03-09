@@ -12,8 +12,8 @@
 //! Run with: cargo run --example basic_usage -p conduit-core
 
 use conduit_core::{
-    RingBuffer, Router, FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION,
-    Decode, Encode, frame_unpack, frame_pack,
+    Decode, Encode, FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, RingBuffer, Router,
+    frame_pack, frame_unpack,
 };
 
 fn main() {
@@ -31,16 +31,14 @@ fn main() {
 
     // Register a "greet" handler that decodes a name string from the payload
     // and returns a greeting.
-    table.register("greet", |payload: Vec<u8>| {
-        match String::decode(&payload) {
-            Some((name, _consumed)) => {
-                let greeting = format!("Hello, {name}! Welcome to conduit.");
-                let mut out = Vec::new();
-                greeting.encode(&mut out);
-                out
-            }
-            None => b"decode error".to_vec(),
+    table.register("greet", |payload: Vec<u8>| match String::decode(&payload) {
+        Some((name, _consumed)) => {
+            let greeting = format!("Hello, {name}! Welcome to conduit.");
+            let mut out = Vec::new();
+            greeting.encode(&mut out);
+            out
         }
+        None => b"decode error".to_vec(),
     });
 
     // Register a simple handler that takes no payload.

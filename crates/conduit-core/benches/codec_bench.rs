@@ -1,8 +1,8 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use conduit_core::{
-    FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, Decode, Encode,
-    frame_unpack, frame_pack,
+    Decode, Encode, FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, frame_pack,
+    frame_unpack,
 };
 
 fn header_roundtrip(c: &mut Criterion) {

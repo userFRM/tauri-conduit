@@ -11,7 +11,7 @@
 //! - **conduit Level 2 (binary)**: raw bytes arrive at the handler via
 //!   Decode → process → Encode. No JSON anywhere in the path.
 
-use conduit_core::{Router, Decode, Encode};
+use conduit_core::{Decode, Encode, Router};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 // ── Shared struct ────────────────────────────────────────────────
