@@ -318,32 +318,31 @@ fn field_named_data_does_not_shadow() {
 }
 
 // ---------------------------------------------------------------------------
-// 9. #[command] attribute macro
+// 9. #[command] attribute macro (new context-aware signature)
 // ---------------------------------------------------------------------------
 
 #[command]
-fn greet(name: String, greeting: String) -> String {
+fn greet_v2(name: String, greeting: String) -> String {
     format!("{greeting}, {name}!")
 }
 
 #[test]
-fn conduit_command_named_params() {
+fn command_v2_named_params() {
     let router = Router::new();
-    router.register_json("greet", greet);
+    router.register_with_context("greet_v2", greet_v2);
 
-    // Frontend sends { "name": "Alice", "greeting": "Hello" }
     let payload = serde_json::to_vec(&serde_json::json!({
         "name": "Alice",
         "greeting": "Hello"
     }))
     .unwrap();
-    let resp = router.call("greet", payload).unwrap();
-    let result: String = serde_json::from_slice(&resp).unwrap();
+    let resp = router.call("greet_v2", payload).unwrap();
+    let result: String = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, "Hello, Alice!");
 }
 
 #[command]
-fn divide(a: f64, b: f64) -> Result<f64, String> {
+fn divide_v2(a: f64, b: f64) -> Result<f64, String> {
     if b == 0.0 {
         Err("division by zero".into())
     } else {
@@ -352,54 +351,69 @@ fn divide(a: f64, b: f64) -> Result<f64, String> {
 }
 
 #[test]
-fn conduit_command_result_ok() {
+fn command_v2_result_ok() {
     let router = Router::new();
-    router.register_json_result("divide", divide);
+    router.register_with_context("divide_v2", divide_v2);
 
     let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 2.0 })).unwrap();
-    let resp = router.call("divide", payload).unwrap();
-    let result: f64 = serde_json::from_slice(&resp).unwrap();
+    let resp = router.call("divide_v2", payload).unwrap();
+    let result: f64 = sonic_rs::from_slice(&resp).unwrap();
     assert!((result - 5.0).abs() < f64::EPSILON);
 }
 
 #[test]
-fn conduit_command_result_err() {
+fn command_v2_result_err() {
     let router = Router::new();
-    router.register_json_result("divide", divide);
+    router.register_with_context("divide_v2", divide_v2);
 
     let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 0.0 })).unwrap();
-    let err = router.call("divide", payload).unwrap_err();
+    let err = router.call("divide_v2", payload).unwrap_err();
     assert_eq!(err.to_string(), "handler error: division by zero");
 }
 
 #[command]
-fn ping() -> String {
+fn ping_v2() -> String {
     "pong".to_string()
 }
 
 #[test]
-fn conduit_command_zero_params() {
+fn command_v2_zero_params() {
     let router = Router::new();
-    router.register_json("ping", ping);
+    router.register_with_context("ping_v2", ping_v2);
 
-    let payload = serde_json::to_vec(&()).unwrap(); // null
-    let resp = router.call("ping", payload).unwrap();
-    let result: String = serde_json::from_slice(&resp).unwrap();
+    let resp = router.call("ping_v2", vec![]).unwrap();
+    let result: String = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, "pong");
 }
 
 #[command]
-fn echo_name(name: String) -> String {
+fn echo_name_v2(name: String) -> String {
     name
 }
 
 #[test]
-fn conduit_command_single_param() {
+fn command_v2_single_param() {
     let router = Router::new();
-    router.register_json("echo_name", echo_name);
+    router.register_with_context("echo_name_v2", echo_name_v2);
 
     let payload = serde_json::to_vec(&serde_json::json!({ "name": "test" })).unwrap();
-    let resp = router.call("echo_name", payload).unwrap();
-    let result: String = serde_json::from_slice(&resp).unwrap();
+    let resp = router.call("echo_name_v2", payload).unwrap();
+    let result: String = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, "test");
+}
+
+#[command]
+fn add_v2(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+#[test]
+fn command_v2_non_result_return() {
+    let router = Router::new();
+    router.register_with_context("add_v2", add_v2);
+
+    let payload = serde_json::to_vec(&serde_json::json!({ "a": 3, "b": 4 })).unwrap();
+    let resp = router.call("add_v2", payload).unwrap();
+    let result: i32 = sonic_rs::from_slice(&resp).unwrap();
+    assert_eq!(result, 7);
 }

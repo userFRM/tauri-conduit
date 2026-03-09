@@ -124,10 +124,13 @@ npm install tauri-plugin-conduit
 
 ### 2. Register your commands (Rust)
 
-Use `#[command]` for Tauri-style named parameters:
+Use `#[conduit::command]` for Tauri-style named parameters, `State<T>` injection, `Result<T, E>` returns, and async:
 
 ```rust
-use tauri_plugin_conduit::command;
+use conduit::command;
+use tauri::State;
+
+struct AppState { app_name: String }
 
 #[command]
 fn get_ticks(symbol: String, limit: u32) -> Vec<Tick> {
@@ -135,8 +138,14 @@ fn get_ticks(symbol: String, limit: u32) -> Vec<Tick> {
 }
 
 #[command]
-fn place_order(symbol: String, qty: f64) -> Result<OrderId, String> {
-    broker::submit(&symbol, qty).map_err(|e| e.to_string())
+fn place_order(state: State<'_, AppState>, symbol: String, qty: f64) -> Result<OrderId, String> {
+    broker::submit(&state.app_name, &symbol, qty).map_err(|e| e.to_string())
+}
+
+#[command]
+async fn fetch_data(url: String) -> Result<Vec<u8>, String> {
+    reqwest::get(&url).await.map_err(|e| e.to_string())?
+        .bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
 }
 ```
 
@@ -147,8 +156,9 @@ Register handlers in your Tauri builder:
 tauri::Builder::default()
     .plugin(
         tauri_plugin_conduit::init()
-            .command_json("get_ticks", get_ticks)
-            .command_json_result("place_order", place_order)
+            .handler("get_ticks", get_ticks)
+            .handler("place_order", place_order)
+            .handler("fetch_data", fetch_data)
             .channel("telemetry")
             .channel_ordered("events")
             .build()
@@ -157,8 +167,9 @@ tauri::Builder::default()
     .unwrap();
 ```
 
-Four handler registration methods are available:
-- `command_json(name, handler)` -- JSON in, JSON out. Pair with `#[command]` for named parameters.
+Five handler registration methods are available:
+- `handler(name, handler)` -- **recommended.** Use with `#[conduit::command]`. Supports named parameters, `State<T>` injection, `Result<T, E>`, and async. Full `#[tauri::command]` parity.
+- `command_json(name, handler)` -- JSON in, JSON out. Pair with `#[command]` for named parameters (no State, no async).
 - `command_json_result(name, handler)` -- same as above, but the handler returns `Result<R, E>`. Errors are propagated to the caller.
 - `command_binary(name, handler)` -- binary in, binary out. The handler takes a type implementing `Decode` and returns a type implementing `Encode`. No JSON involved.
 - `command(name, handler)` -- raw `Vec<u8>` in, `Vec<u8>` out. Full control, no automatic (de)serialization.
@@ -285,7 +296,7 @@ sequenceDiagram
 |---|---|---|---|
 | **Transport** | Webview bridge | Custom protocol (in-process) | Custom protocol (in-process) |
 | **Rust-side JSON** | serde_json: bytes -> Value -> T (double parse) | sonic-rs: bytes -> T (single parse, SIMD) | No JSON |
-| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[command]` + `command_json`: named params, `Result<T,E>`, sync only, no `State<T>` | `command_binary(name, fn)`: Encode/Decode types, sync only |
+| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[conduit::command]` + `handler()`: named params, `State<T>`, `Result<T,E>`, async | `command_binary(name, fn)`: Encode/Decode types, sync only |
 | **Streaming** | Manual event wiring | Built-in push + drain (lossy and ordered) | Built-in push + drain (lossy and ordered) |
 | **Network surface** | None | None | None |
 
@@ -321,7 +332,7 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 conduit is not a free lunch. These are real costs you should weigh before adopting it.
 
-**Handler ergonomics.** conduit provides `#[command]` for named parameters and `Result<T, E>` returns -- similar to `#[tauri::command]`. However, conduit handlers are synchronous only (no async) and do not support `State<T>` injection. If you need managed state, pass it through your handler manually.
+**Handler ergonomics.** `#[conduit::command]` now supports named parameters, `State<T>` injection, async handlers, and `Result<T, E>` returns -- matching `#[tauri::command]` feature-for-feature. The only remaining difference is the proc macro internals (conduit hardcodes the Wry runtime; Tauri is generic over `Runtime`).
 
 **Streaming tradeoffs.** Lossy channels (`channel()`) drop the oldest frames when the consumer falls behind. Ordered channels (`channel_ordered()`) never drop frames but return an error when full (backpressure). Neither channel type provides at-least-once or exactly-once delivery guarantees across reconnects.
 
@@ -336,6 +347,7 @@ conduit is not a free lunch. These are real costs you should weigh before adopti
 ```
 tauri-conduit/
   crates/
+    conduit/                   Facade crate (re-exports #[command], Encode, Decode)
     conduit-core/              Core library (codec, router, ring buffer)
     conduit-derive/            Proc macros (Encode, Decode, #[command])
     tauri-plugin-conduit/      Tauri v2 plugin

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/conduit",
     "crates/conduit-core",
     "crates/conduit-derive",
 ]

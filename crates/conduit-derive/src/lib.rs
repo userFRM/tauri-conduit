@@ -186,22 +186,31 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 }
 
 // ---------------------------------------------------------------------------
-// #[conduit_command] attribute macro
+// #[command] attribute macro
 // ---------------------------------------------------------------------------
 
-/// Attribute macro that transforms a function with named parameters into a
-/// handler compatible with conduit's `command_json` / `command_json_result`
-/// registration methods.
+/// Attribute macro that transforms a function into a context-aware conduit
+/// handler with the signature:
 ///
-/// This is conduit's equivalent of `#[tauri::command]`: write a function with
-/// named parameters, and the macro generates a hidden args struct with
-/// `#[derive(Deserialize)]` so the frontend can send `{ "name": "Alice",
-/// "age": 30 }` as a JSON object with named fields.
+/// ```text
+/// fn name(Vec<u8>, &dyn Any) -> Result<Vec<u8>, conduit_core::Error>
+/// ```
 ///
-/// # Usage
+/// This is conduit's equivalent of `#[tauri::command]`. The macro supports:
+///
+/// - **Named parameters** — generates a hidden args struct with
+///   `#[derive(Deserialize)]`.
+/// - **`State<T>` injection** — parameters whose type path ends in `State`
+///   are extracted from the context (which must be an `AppHandle<Wry>`).
+/// - **`Result<T, E>` returns** — errors are converted via `Display` into
+///   `conduit_core::Error::Handler`.
+/// - **`async` functions** — wrapped with
+///   `tokio::runtime::Handle::current().block_on()`.
+///
+/// # Examples
 ///
 /// ```rust,ignore
-/// use tauri_plugin_conduit::command;
+/// use conduit::command;
 ///
 /// // Named parameters — frontend sends { "name": "Alice", "greeting": "Hi" }
 /// #[command]
@@ -209,23 +218,19 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 ///     format!("{greeting}, {name}!")
 /// }
 ///
-/// // Result return — errors become conduit::Error::Handler
+/// // Result return — errors become conduit_core::Error::Handler
 /// #[command]
 /// fn divide(a: f64, b: f64) -> Result<f64, String> {
 ///     if b == 0.0 { Err("division by zero".into()) }
 ///     else { Ok(a / b) }
 /// }
 ///
-/// // Register with the plugin builder:
-/// tauri_plugin_conduit::init()
-///     .command_json("greet", greet)
-///     .command_json_result("divide", divide)
-///     .build()
+/// // State injection + async + Result
+/// #[command]
+/// async fn fetch_user(state: State<'_, Db>, id: u64) -> Result<User, String> {
+///     state.get_user(id).await.map_err(|e| e.to_string())
+/// }
 /// ```
-///
-/// For zero-parameter functions, the macro generates a handler that takes
-/// `()` (unit), compatible with `command_json("name", handler)` where the
-/// frontend sends an empty body or `null`.
 #[proc_macro_attribute]
 pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
@@ -251,70 +256,227 @@ fn pascal_case(s: &str) -> String {
         .collect()
 }
 
-/// Implementation of the `#[conduit_command]` attribute macro.
+/// Check if a type is `State<...>` by looking at the last path segment.
+fn is_state_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Reference(type_ref) = ty {
+        // Handle &State<...> (reference to State)
+        return is_state_type(&type_ref.elem);
+    }
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "State";
+        }
+    }
+    false
+}
+
+/// Extract the inner type `T` from `State<'_, T>`.
+///
+/// Returns the second generic argument (skipping the lifetime).
+fn extract_state_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+    // Unwrap references first
+    let ty = if let syn::Type::Reference(type_ref) = ty {
+        &*type_ref.elem
+    } else {
+        ty
+    };
+
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            if seg.ident == "State" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    // Find the first type argument (skip lifetimes)
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(inner_ty) = arg {
+                            return Some(inner_ty);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if the return type is `Result<...>`.
+fn is_result_return(output: &syn::ReturnType) -> bool {
+    match output {
+        syn::ReturnType::Default => false,
+        syn::ReturnType::Type(_, ty) => {
+            if let syn::Type::Path(type_path) = ty.as_ref() {
+                if let Some(seg) = type_path.path.segments.last() {
+                    return seg.ident == "Result";
+                }
+            }
+            false
+        }
+    }
+}
+
+/// Implementation of the `#[command]` attribute macro.
+///
+/// Generates a function with signature:
+/// `fn name(__payload: Vec<u8>, __ctx: &dyn Any) -> Result<Vec<u8>, conduit_core::Error>`
 fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     let fn_name = &func.sig.ident;
     let fn_vis = &func.vis;
-    let fn_output = &func.sig.output;
     let fn_attrs = &func.attrs;
     let fn_stmts = &func.block.stmts;
+    let is_async = func.sig.asyncness.is_some();
 
-    // Reject self receivers.
+    // Separate State params from regular params
+    let mut state_params: Vec<(&syn::Ident, &syn::Type)> = Vec::new();
+    let mut regular_params: Vec<(&syn::Ident, &syn::Type)> = Vec::new();
+
     for arg in &func.sig.inputs {
-        if matches!(arg, FnArg::Receiver(_)) {
+        if let FnArg::Receiver(_) = arg {
             return Err(syn::Error::new_spanned(
                 arg,
-                "#[conduit_command] cannot be used on methods with `self`",
+                "#[command] cannot be used on methods with `self`",
             ));
         }
-    }
-
-    // Collect parameter names and types.
-    let mut param_names: Vec<&syn::Ident> = Vec::new();
-    let mut param_types: Vec<&syn::Type> = Vec::new();
-
-    for arg in &func.sig.inputs {
         if let FnArg::Typed(pat_type) = arg {
             if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                param_names.push(&pat_ident.ident);
-                param_types.push(&*pat_type.ty);
+                let param_name = &pat_ident.ident;
+                let param_type = &*pat_type.ty;
+
+                if is_state_type(param_type) {
+                    state_params.push((param_name, param_type));
+                } else {
+                    regular_params.push((param_name, param_type));
+                }
             } else {
                 return Err(syn::Error::new_spanned(
                     &pat_type.pat,
-                    "#[conduit_command] requires named parameters (e.g. `name: String`)",
+                    "#[command] requires named parameters",
                 ));
             }
         }
     }
 
-    // Zero parameters: generate fn(()) handler.
-    if param_names.is_empty() {
-        return Ok(quote! {
-            #(#fn_attrs)*
-            #fn_vis fn #fn_name(_: ()) #fn_output {
-                #(#fn_stmts)*
-            }
-        });
-    }
+    // Detect Result return type
+    let is_result = is_result_return(&func.sig.output);
 
-    // Generate args struct name: __Conduit{FnName}Args.
+    // Capture the original return type for closure annotation
+    let fn_output = &func.sig.output;
+
+    // Generate args struct for regular params
+    let has_args = !regular_params.is_empty();
     let struct_name = syn::Ident::new(
         &format!("__Conduit{}Args", pascal_case(&fn_name.to_string())),
         fn_name.span(),
     );
 
-    Ok(quote! {
-        #[doc(hidden)]
-        #[derive(conduit_core::serde::Deserialize)]
-        #[serde(crate = "conduit_core::serde")]
-        #fn_vis struct #struct_name {
-            #(#param_names: #param_types),*
+    let regular_names: Vec<_> = regular_params.iter().map(|(n, _)| *n).collect();
+    let regular_types: Vec<_> = regular_params.iter().map(|(_, t)| *t).collect();
+
+    let has_state = !state_params.is_empty();
+
+    // State extraction code
+    let state_extraction = if has_state {
+        let state_stmts: Vec<proc_macro2::TokenStream> = state_params
+            .iter()
+            .map(|(name, ty)| {
+                let inner_ty = extract_state_inner_type(ty);
+                match inner_ty {
+                    Some(inner) => {
+                        quote! {
+                            let #name: ::tauri::State<'_, #inner> = ::tauri::Manager::state(__app);
+                        }
+                    }
+                    None => {
+                        // Fallback: use the full type as-is
+                        quote! {
+                            let #name: #ty = ::tauri::Manager::state(__app);
+                        }
+                    }
+                }
+            })
+            .collect();
+        quote! {
+            let __app = __ctx
+                .downcast_ref::<::tauri::AppHandle<::tauri::Wry>>()
+                .ok_or_else(|| ::conduit_core::Error::Handler(
+                    "internal: handler context must be AppHandle<Wry>".into()
+                ))?;
+            #(#state_stmts)*
         }
+    } else {
+        quote! {}
+    };
+
+    // Args deserialization
+    let args_deser = if has_args {
+        quote! {
+            let #struct_name { #(#regular_names),* } =
+                ::sonic_rs::from_slice(&__payload)
+                    .map_err(::conduit_core::Error::from)?;
+        }
+    } else {
+        quote! {
+            // Accept empty body or null — no deserialization needed.
+            let _ = &__payload;
+        }
+    };
+
+    // Body execution (async vs sync)
+    let body_exec = if is_async {
+        quote! {
+            ::tokio::runtime::Handle::current().block_on(async move {
+                #(#fn_stmts)*
+            })
+        }
+    } else {
+        quote! {
+            (|| #fn_output { #(#fn_stmts)* })()
+        }
+    };
+
+    // Result handling
+    let result_handling = if is_result {
+        quote! {
+            let __result = #body_exec;
+            match __result {
+                ::std::result::Result::Ok(__v) => {
+                    ::sonic_rs::to_vec(&__v).map_err(::conduit_core::Error::from)
+                }
+                ::std::result::Result::Err(__e) => {
+                    ::std::result::Result::Err(::conduit_core::Error::Handler(__e.to_string()))
+                }
+            }
+        }
+    } else {
+        quote! {
+            let __result = #body_exec;
+            ::sonic_rs::to_vec(&__result).map_err(::conduit_core::Error::from)
+        }
+    };
+
+    // Generate struct definition (only if has args)
+    let struct_def = if has_args {
+        quote! {
+            #[doc(hidden)]
+            #[derive(::conduit_core::serde::Deserialize)]
+            #[serde(crate = "conduit_core::serde")]
+            #fn_vis struct #struct_name {
+                #(#regular_names: #regular_types),*
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    Ok(quote! {
+        #struct_def
 
         #(#fn_attrs)*
-        #fn_vis fn #fn_name(__args: #struct_name) #fn_output {
-            let #struct_name { #(#param_names),* } = __args;
-            #(#fn_stmts)*
+        #fn_vis fn #fn_name(
+            __payload: ::std::vec::Vec<u8>,
+            __ctx: &dyn ::std::any::Any,
+        ) -> ::std::result::Result<::std::vec::Vec<u8>, ::conduit_core::Error> {
+            #state_extraction
+            #args_deser
+            #result_handling
         }
     })
 }
