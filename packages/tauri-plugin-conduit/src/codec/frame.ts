@@ -21,7 +21,7 @@ export enum MsgType {
 
 export interface FrameHeader {
   version: number;
-  transportTier: number;
+  reserved: number;
   msgType: number;
   sequence: number;
   payloadLen: number;
@@ -30,7 +30,7 @@ export interface FrameHeader {
 /**
  * Write a frame header followed by a payload into a single ArrayBuffer.
  */
-export function writeFrameHeader(
+export function packFrame(
   header: FrameHeader,
   payload: Uint8Array,
 ): ArrayBuffer {
@@ -38,7 +38,7 @@ export function writeFrameHeader(
   const view = new DataView(buf);
 
   view.setUint8(0, header.version);
-  view.setUint8(1, header.transportTier);
+  view.setUint8(1, header.reserved);
   view.setUint8(2, header.msgType);
   view.setUint32(3, header.sequence, true); // LE
   view.setUint32(7, header.payloadLen, true); // LE
@@ -52,7 +52,7 @@ export function writeFrameHeader(
  * Read a frame header and extract the payload from a raw ArrayBuffer.
  * Returns null if the buffer is too small for a complete frame.
  */
-export function readFrameHeader(
+export function unpackFrame(
   data: ArrayBuffer,
 ): { header: FrameHeader; payload: ArrayBuffer } | null {
   if (data.byteLength < FRAME_HEADER_SIZE) return null;
@@ -61,7 +61,7 @@ export function readFrameHeader(
 
   const header: FrameHeader = {
     version: view.getUint8(0),
-    transportTier: view.getUint8(1),
+    reserved: view.getUint8(1),
     msgType: view.getUint8(2),
     sequence: view.getUint32(3, true),
     payloadLen: view.getUint32(7, true),

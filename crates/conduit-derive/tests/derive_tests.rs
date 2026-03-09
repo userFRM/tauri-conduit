@@ -1,11 +1,11 @@
-use conduit_core::{WireDecode, WireEncode};
-use conduit_derive::{WireDecode, WireEncode};
+use conduit_core::{Decode, Encode};
+use conduit_derive::{Decode, Encode};
 
 // ---------------------------------------------------------------------------
 // Test structs
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct SimplePrimitives {
     a: u8,
     b: u32,
@@ -14,34 +14,34 @@ struct SimplePrimitives {
     e: bool,
 }
 
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct VarLength {
     payload: Vec<u8>,
     label: String,
 }
 
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct Empty {}
 
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct SingleField {
     value: u32,
 }
 
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct Alpha {
     x: u16,
     y: u16,
 }
 
 /// Regression test: field named `data` must not shadow the decode parameter.
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct HasDataField {
     data: Vec<u8>,
     tag: u32,
 }
 
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct Beta {
     flag: bool,
     name: String,
@@ -62,9 +62,9 @@ fn simple_struct_roundtrip() {
     };
 
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
-    let (decoded, consumed) = SimplePrimitives::wire_decode(&buf).unwrap();
+    let (decoded, consumed) = SimplePrimitives::decode(&buf).unwrap();
     assert_eq!(decoded, original);
     assert_eq!(consumed, buf.len());
 }
@@ -81,9 +81,9 @@ fn variable_length_fields_roundtrip() {
     };
 
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
-    let (decoded, consumed) = VarLength::wire_decode(&buf).unwrap();
+    let (decoded, consumed) = VarLength::decode(&buf).unwrap();
     assert_eq!(decoded, original);
     assert_eq!(consumed, buf.len());
 }
@@ -96,12 +96,12 @@ fn variable_length_empty_contents() {
     };
 
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
     // Two 4-byte length prefixes, both zero.
     assert_eq!(buf.len(), 4 + 4);
 
-    let (decoded, consumed) = VarLength::wire_decode(&buf).unwrap();
+    let (decoded, consumed) = VarLength::decode(&buf).unwrap();
     assert_eq!(decoded, original);
     assert_eq!(consumed, buf.len());
 }
@@ -115,12 +115,12 @@ fn empty_struct_roundtrip() {
     let original = Empty {};
 
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
     assert!(buf.is_empty(), "empty struct should produce zero bytes");
-    assert_eq!(original.wire_size(), 0);
+    assert_eq!(original.encode_size(), 0);
 
-    let (decoded, consumed) = Empty::wire_decode(&buf).unwrap();
+    let (decoded, consumed) = Empty::decode(&buf).unwrap();
     assert_eq!(decoded, original);
     assert_eq!(consumed, 0);
 }
@@ -134,21 +134,21 @@ fn single_field_roundtrip() {
     let original = SingleField { value: 42 };
 
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
     assert_eq!(buf.len(), 4);
 
-    let (decoded, consumed) = SingleField::wire_decode(&buf).unwrap();
+    let (decoded, consumed) = SingleField::decode(&buf).unwrap();
     assert_eq!(decoded, original);
     assert_eq!(consumed, 4);
 }
 
 // ---------------------------------------------------------------------------
-// 5. wire_size accuracy
+// 5. encode_size accuracy
 // ---------------------------------------------------------------------------
 
 #[test]
-fn wire_size_matches_encoded_len_primitives() {
+fn encode_size_matches_encoded_len_primitives() {
     let s = SimplePrimitives {
         a: 1,
         b: 2,
@@ -157,49 +157,49 @@ fn wire_size_matches_encoded_len_primitives() {
         e: false,
     };
     let mut buf = Vec::new();
-    s.wire_encode(&mut buf);
+    s.encode(&mut buf);
     assert_eq!(
-        s.wire_size(),
+        s.encode_size(),
         buf.len(),
-        "wire_size() must equal actual encoded length for SimplePrimitives"
+        "encode_size() must equal actual encoded length for SimplePrimitives"
     );
     // Expected: u8(1) + u32(4) + i64(8) + f64(8) + bool(1) = 22
-    assert_eq!(s.wire_size(), 22);
+    assert_eq!(s.encode_size(), 22);
 }
 
 #[test]
-fn wire_size_matches_encoded_len_variable() {
+fn encode_size_matches_encoded_len_variable() {
     let v = VarLength {
         payload: vec![1, 2, 3],
         label: String::from("hello"),
     };
     let mut buf = Vec::new();
-    v.wire_encode(&mut buf);
+    v.encode(&mut buf);
     assert_eq!(
-        v.wire_size(),
+        v.encode_size(),
         buf.len(),
-        "wire_size() must equal actual encoded length for VarLength"
+        "encode_size() must equal actual encoded length for VarLength"
     );
     // Expected: (4 + 3) + (4 + 5) = 16
-    assert_eq!(v.wire_size(), 16);
+    assert_eq!(v.encode_size(), 16);
 }
 
 #[test]
-fn wire_size_matches_encoded_len_empty() {
+fn encode_size_matches_encoded_len_empty() {
     let e = Empty {};
     let mut buf = Vec::new();
-    e.wire_encode(&mut buf);
-    assert_eq!(e.wire_size(), buf.len());
-    assert_eq!(e.wire_size(), 0);
+    e.encode(&mut buf);
+    assert_eq!(e.encode_size(), buf.len());
+    assert_eq!(e.encode_size(), 0);
 }
 
 #[test]
-fn wire_size_matches_encoded_len_single() {
+fn encode_size_matches_encoded_len_single() {
     let s = SingleField { value: 99 };
     let mut buf = Vec::new();
-    s.wire_encode(&mut buf);
-    assert_eq!(s.wire_size(), buf.len());
-    assert_eq!(s.wire_size(), 4);
+    s.encode(&mut buf);
+    assert_eq!(s.encode_size(), buf.len());
+    assert_eq!(s.encode_size(), 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,12 +216,12 @@ fn truncated_buffer_returns_none() {
         e: true,
     };
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
     // Try every possible truncation length (except the full buffer).
     for cut in 0..buf.len() {
         assert!(
-            SimplePrimitives::wire_decode(&buf[..cut]).is_none(),
+            SimplePrimitives::decode(&buf[..cut]).is_none(),
             "should fail to decode with only {cut}/{} bytes",
             buf.len()
         );
@@ -235,11 +235,11 @@ fn truncated_variable_length_returns_none() {
         label: String::from("x"),
     };
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
     for cut in 0..buf.len() {
         assert!(
-            VarLength::wire_decode(&buf[..cut]).is_none(),
+            VarLength::decode(&buf[..cut]).is_none(),
             "should fail to decode VarLength with only {cut}/{} bytes",
             buf.len()
         );
@@ -263,15 +263,15 @@ fn multiple_structs_back_to_back() {
 
     // Encode both into a single buffer.
     let mut buf = Vec::new();
-    alpha.wire_encode(&mut buf);
-    beta.wire_encode(&mut buf);
+    alpha.encode(&mut buf);
+    beta.encode(&mut buf);
 
     // Decode Alpha from the start.
-    let (decoded_alpha, alpha_len) = Alpha::wire_decode(&buf).unwrap();
+    let (decoded_alpha, alpha_len) = Alpha::decode(&buf).unwrap();
     assert_eq!(decoded_alpha, alpha);
 
     // Decode Beta from the remaining bytes.
-    let (decoded_beta, beta_len) = Beta::wire_decode(&buf[alpha_len..]).unwrap();
+    let (decoded_beta, beta_len) = Beta::decode(&buf[alpha_len..]).unwrap();
     assert_eq!(decoded_beta, beta);
 
     // Consumed offsets should cover the entire buffer.
@@ -279,7 +279,7 @@ fn multiple_structs_back_to_back() {
 }
 
 #[test]
-fn multiple_structs_wire_size_sum() {
+fn multiple_structs_encode_size_sum() {
     let alpha = Alpha { x: 100, y: 200 };
     let beta = Beta {
         flag: false,
@@ -287,13 +287,13 @@ fn multiple_structs_wire_size_sum() {
     };
 
     let mut buf = Vec::new();
-    alpha.wire_encode(&mut buf);
-    beta.wire_encode(&mut buf);
+    alpha.encode(&mut buf);
+    beta.encode(&mut buf);
 
     assert_eq!(
-        alpha.wire_size() + beta.wire_size(),
+        alpha.encode_size() + beta.encode_size(),
         buf.len(),
-        "sum of wire_size() must equal combined encoded length"
+        "sum of encode_size() must equal combined encoded length"
     );
 }
 
@@ -308,9 +308,9 @@ fn field_named_data_does_not_shadow() {
         tag: 42,
     };
     let mut buf = Vec::new();
-    original.wire_encode(&mut buf);
+    original.encode(&mut buf);
 
-    let (decoded, consumed) = HasDataField::wire_decode(&buf).unwrap();
+    let (decoded, consumed) = HasDataField::decode(&buf).unwrap();
     assert_eq!(decoded, original);
     assert_eq!(consumed, buf.len());
     // Verify the tag field (after data) decoded correctly — this was the bug.

@@ -11,9 +11,9 @@ pub mod ringbuf;
 pub mod router;
 
 pub use codec::{
-    FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, WireDecode, WireEncode,
-    frame_unwrap, frame_wrap,
+    Decode, Encode, FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, frame_pack,
+    frame_unpack,
 };
-pub use error::ConduitError;
-pub use ringbuf::ConduitRingBuffer;
-pub use router::DispatchTable;
+pub use error::Error;
+pub use ringbuf::RingBuffer;
+pub use router::Router;

@@ -4,6 +4,6 @@ members = [
     "crates/conduit-derive",
 ]
 exclude = [
-    "crates/conduit-tauri",  # requires system libs (webkit2gtk); built separately in CI
+    "crates/tauri-plugin-conduit",  # requires system libs (webkit2gtk); built separately in CI
 ]
 resolver = "2"

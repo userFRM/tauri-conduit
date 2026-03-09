@@ -1,10 +1,10 @@
 [package]
 name = "conduit-derive"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Derive macros for conduit-core: WireEncode, WireDecode."
+description = "Derive macros for conduit-core: Encode, Decode."
 keywords = ["tauri", "ipc", "derive", "binary", "codec"]
 categories = ["gui", "network-programming", "development-tools::procedural-macro-helpers"]
 repository = "https://github.com/userFRM/tauri-conduit"
@@ -20,4 +20,4 @@ quote = "1"
 proc-macro2 = "1"
 
 [dev-dependencies]
-conduit-core = { version = "0.1.0", path = "../conduit-core" }
+conduit-core = { version = "0.2.0", path = "../conduit-core" }

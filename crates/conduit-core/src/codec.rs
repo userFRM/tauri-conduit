@@ -1,7 +1,7 @@
 //! Binary frame format and wire encoding traits for conduit.
 //!
 //! Every conduit message is framed with an 11-byte header followed by
-//! a variable-length payload. The [`WireEncode`] / [`WireDecode`] traits
+//! a variable-length payload. The [`Encode`] / [`Decode`] traits
 //! provide zero-copy-friendly serialisation for primitive types, byte
 //! vectors, and strings.
 //!
@@ -10,7 +10,7 @@
 //! | Offset | Size | Field            | Notes                                  |
 //! |--------|------|------------------|----------------------------------------|
 //! | 0      | 1    | `version`        | Always [`PROTOCOL_VERSION`] (1)        |
-//! | 1      | 1    | `transport_tier` | 0=protocol (reserved for future use)   |
+//! | 1      | 1    | `reserved` | 0=protocol (reserved for future use)   |
 //! | 2      | 1    | `msg_type`       | See [`MsgType`]                        |
 //! | 3      | 4    | `sequence`       | LE u32, monotonic counter              |
 //! | 7      | 4    | `payload_len`    | LE u32, byte length of trailing data   |
@@ -79,7 +79,7 @@ pub struct FrameHeader {
     /// Protocol version (always [`PROTOCOL_VERSION`]).
     pub version: u8,
     /// Transport identifier: 0=protocol (reserved for future use).
-    pub transport_tier: u8,
+    pub reserved: u8,
     /// Message type tag.
     pub msg_type: MsgType,
     /// Monotonically increasing sequence number (LE).
@@ -93,7 +93,7 @@ impl FrameHeader {
     #[inline]
     pub fn write_to(&self, buf: &mut Vec<u8>) {
         buf.push(self.version);
-        buf.push(self.transport_tier);
+        buf.push(self.reserved);
         buf.push(self.msg_type.to_u8());
         buf.extend_from_slice(&self.sequence.to_le_bytes());
         buf.extend_from_slice(&self.payload_len.to_le_bytes());
@@ -108,13 +108,13 @@ impl FrameHeader {
             return None;
         }
         let version = data[0];
-        let transport_tier = data[1];
+        let reserved = data[1];
         let msg_type = MsgType::from_u8(data[2]);
         let sequence = u32::from_le_bytes([data[3], data[4], data[5], data[6]]);
         let payload_len = u32::from_le_bytes([data[7], data[8], data[9], data[10]]);
         Some(Self {
             version,
-            transport_tier,
+            reserved,
             msg_type,
             sequence,
             payload_len,
@@ -123,13 +123,13 @@ impl FrameHeader {
 }
 
 // ---------------------------------------------------------------------------
-// frame_wrap / frame_unwrap
+// frame_pack / frame_unpack
 // ---------------------------------------------------------------------------
 
 /// Build a complete frame: header bytes followed by payload bytes.
 #[inline]
 #[must_use]
-pub fn frame_wrap(header: &FrameHeader, payload: &[u8]) -> Vec<u8> {
+pub fn frame_pack(header: &FrameHeader, payload: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(FRAME_HEADER_SIZE + payload.len());
     header.write_to(&mut buf);
     buf.extend_from_slice(payload);
@@ -142,7 +142,7 @@ pub fn frame_wrap(header: &FrameHeader, payload: &[u8]) -> Vec<u8> {
 /// remaining bytes are fewer than `payload_len`.
 #[inline]
 #[must_use]
-pub fn frame_unwrap(data: &[u8]) -> Option<(FrameHeader, &[u8])> {
+pub fn frame_unpack(data: &[u8]) -> Option<(FrameHeader, &[u8])> {
     let header = FrameHeader::read_from(data)?;
     let payload_end = FRAME_HEADER_SIZE + header.payload_len as usize;
     if data.len() < payload_end {
@@ -152,26 +152,26 @@ pub fn frame_unwrap(data: &[u8]) -> Option<(FrameHeader, &[u8])> {
 }
 
 // ---------------------------------------------------------------------------
-// WireEncode / WireDecode traits
+// Encode / Decode traits
 // ---------------------------------------------------------------------------
 
 /// Encode a value into a byte buffer in conduit's binary wire format.
-pub trait WireEncode {
+pub trait Encode {
     /// Append the encoded representation to `buf`.
-    fn wire_encode(&self, buf: &mut Vec<u8>);
+    fn encode(&self, buf: &mut Vec<u8>);
 
-    /// The exact number of bytes that [`wire_encode`](WireEncode::wire_encode)
+    /// The exact number of bytes that [`encode`](Encode::encode)
     /// will append.
-    fn wire_size(&self) -> usize;
+    fn encode_size(&self) -> usize;
 }
 
 /// Decode a value from a byte slice in conduit's binary wire format.
 ///
 /// Returns the decoded value together with the number of bytes consumed,
 /// or `None` if the data is too short or malformed.
-pub trait WireDecode: Sized {
+pub trait Decode: Sized {
     /// Attempt to decode from the start of `data`.
-    fn wire_decode(data: &[u8]) -> Option<(Self, usize)>;
+    fn decode(data: &[u8]) -> Option<(Self, usize)>;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,18 +181,18 @@ pub trait WireDecode: Sized {
 macro_rules! impl_wire_int {
     ($($ty:ty),+) => {
         $(
-            impl WireEncode for $ty {
-                fn wire_encode(&self, buf: &mut Vec<u8>) {
+            impl Encode for $ty {
+                fn encode(&self, buf: &mut Vec<u8>) {
                     buf.extend_from_slice(&self.to_le_bytes());
                 }
 
-                fn wire_size(&self) -> usize {
+                fn encode_size(&self) -> usize {
                     std::mem::size_of::<$ty>()
                 }
             }
 
-            impl WireDecode for $ty {
-                fn wire_decode(data: &[u8]) -> Option<(Self, usize)> {
+            impl Decode for $ty {
+                fn decode(data: &[u8]) -> Option<(Self, usize)> {
                     const SIZE: usize = std::mem::size_of::<$ty>();
                     if data.len() < SIZE {
                         return None;
@@ -208,18 +208,18 @@ macro_rules! impl_wire_int {
 impl_wire_int!(u8, u16, u32, u64, i8, i16, i32, i64, f32, f64);
 
 // bool: encoded as a single byte (0 or 1).
-impl WireEncode for bool {
-    fn wire_encode(&self, buf: &mut Vec<u8>) {
+impl Encode for bool {
+    fn encode(&self, buf: &mut Vec<u8>) {
         buf.push(u8::from(*self));
     }
 
-    fn wire_size(&self) -> usize {
+    fn encode_size(&self) -> usize {
         1
     }
 }
 
-impl WireDecode for bool {
-    fn wire_decode(data: &[u8]) -> Option<(Self, usize)> {
+impl Decode for bool {
+    fn decode(data: &[u8]) -> Option<(Self, usize)> {
         if data.is_empty() {
             return None;
         }
@@ -232,8 +232,8 @@ impl WireDecode for bool {
 }
 
 // Vec<u8>: 4-byte LE length prefix followed by raw bytes.
-impl WireEncode for Vec<u8> {
-    fn wire_encode(&self, buf: &mut Vec<u8>) {
+impl Encode for Vec<u8> {
+    fn encode(&self, buf: &mut Vec<u8>) {
         let len: u32 = self.len().try_into().unwrap_or_else(|_| {
             panic!(
                 "conduit: payload too large ({} bytes exceeds u32::MAX)",
@@ -244,13 +244,13 @@ impl WireEncode for Vec<u8> {
         buf.extend_from_slice(self);
     }
 
-    fn wire_size(&self) -> usize {
+    fn encode_size(&self) -> usize {
         4 + self.len()
     }
 }
 
-impl WireDecode for Vec<u8> {
-    fn wire_decode(data: &[u8]) -> Option<(Self, usize)> {
+impl Decode for Vec<u8> {
+    fn decode(data: &[u8]) -> Option<(Self, usize)> {
         if data.len() < 4 {
             return None;
         }
@@ -264,8 +264,8 @@ impl WireDecode for Vec<u8> {
 }
 
 // String: 4-byte LE length prefix followed by UTF-8 bytes.
-impl WireEncode for String {
-    fn wire_encode(&self, buf: &mut Vec<u8>) {
+impl Encode for String {
+    fn encode(&self, buf: &mut Vec<u8>) {
         let len: u32 = self.len().try_into().unwrap_or_else(|_| {
             panic!(
                 "conduit: payload too large ({} bytes exceeds u32::MAX)",
@@ -276,13 +276,13 @@ impl WireEncode for String {
         buf.extend_from_slice(self.as_bytes());
     }
 
-    fn wire_size(&self) -> usize {
+    fn encode_size(&self) -> usize {
         4 + self.len()
     }
 }
 
-impl WireDecode for String {
-    fn wire_decode(data: &[u8]) -> Option<(Self, usize)> {
+impl Decode for String {
+    fn decode(data: &[u8]) -> Option<(Self, usize)> {
         if data.len() < 4 {
             return None;
         }
@@ -308,7 +308,7 @@ mod tests {
     fn frame_header_roundtrip() {
         let original = FrameHeader {
             version: PROTOCOL_VERSION,
-            transport_tier: 0,
+            reserved: 0,
             msg_type: MsgType::Request,
             sequence: 42,
             payload_len: 128,
@@ -321,19 +321,19 @@ mod tests {
     }
 
     #[test]
-    fn frame_wrap_unwrap() {
+    fn frame_pack_unwrap() {
         let header = FrameHeader {
             version: PROTOCOL_VERSION,
-            transport_tier: 0,
+            reserved: 0,
             msg_type: MsgType::Push,
             sequence: 7,
             payload_len: 5,
         };
         let payload = b"hello";
-        let frame = frame_wrap(&header, payload);
+        let frame = frame_pack(&header, payload);
         assert_eq!(frame.len(), FRAME_HEADER_SIZE + 5);
 
-        let (parsed_header, parsed_payload) = frame_unwrap(&frame).unwrap();
+        let (parsed_header, parsed_payload) = frame_unpack(&frame).unwrap();
         assert_eq!(parsed_header, header);
         assert_eq!(parsed_payload, payload);
     }
@@ -342,71 +342,71 @@ mod tests {
     fn frame_too_short() {
         let short = [0u8; 5];
         assert!(FrameHeader::read_from(&short).is_none());
-        assert!(frame_unwrap(&short).is_none());
+        assert!(frame_unpack(&short).is_none());
     }
 
     #[test]
-    fn wire_encode_decode_primitives() {
+    fn encode_decode_primitives() {
         // u8
         let mut buf = Vec::new();
-        42u8.wire_encode(&mut buf);
-        let (val, consumed) = u8::wire_decode(&buf).unwrap();
+        42u8.encode(&mut buf);
+        let (val, consumed) = u8::decode(&buf).unwrap();
         assert_eq!(val, 42u8);
         assert_eq!(consumed, 1);
 
         // u32
         buf.clear();
-        0xDEAD_BEEFu32.wire_encode(&mut buf);
-        let (val, consumed) = u32::wire_decode(&buf).unwrap();
+        0xDEAD_BEEFu32.encode(&mut buf);
+        let (val, consumed) = u32::decode(&buf).unwrap();
         assert_eq!(val, 0xDEAD_BEEFu32);
         assert_eq!(consumed, 4);
 
         // i64
         buf.clear();
-        (-999_999i64).wire_encode(&mut buf);
-        let (val, consumed) = i64::wire_decode(&buf).unwrap();
+        (-999_999i64).encode(&mut buf);
+        let (val, consumed) = i64::decode(&buf).unwrap();
         assert_eq!(val, -999_999i64);
         assert_eq!(consumed, 8);
 
         // f64
         buf.clear();
-        std::f64::consts::PI.wire_encode(&mut buf);
-        let (val, consumed) = f64::wire_decode(&buf).unwrap();
+        std::f64::consts::PI.encode(&mut buf);
+        let (val, consumed) = f64::decode(&buf).unwrap();
         assert_eq!(val, std::f64::consts::PI);
         assert_eq!(consumed, 8);
 
         // bool
         buf.clear();
-        true.wire_encode(&mut buf);
-        let (val, consumed) = bool::wire_decode(&buf).unwrap();
+        true.encode(&mut buf);
+        let (val, consumed) = bool::decode(&buf).unwrap();
         assert!(val);
         assert_eq!(consumed, 1);
 
         buf.clear();
-        false.wire_encode(&mut buf);
-        let (val, consumed) = bool::wire_decode(&buf).unwrap();
+        false.encode(&mut buf);
+        let (val, consumed) = bool::decode(&buf).unwrap();
         assert!(!val);
         assert_eq!(consumed, 1);
     }
 
     #[test]
-    fn wire_encode_decode_vec() {
+    fn encode_decode_vec() {
         let original: Vec<u8> = vec![0xCA, 0xFE, 0xBA, 0xBE];
         let mut buf = Vec::new();
-        original.wire_encode(&mut buf);
+        original.encode(&mut buf);
         assert_eq!(buf.len(), 4 + 4); // 4-byte length + 4 bytes
-        let (decoded, consumed) = Vec::<u8>::wire_decode(&buf).unwrap();
+        let (decoded, consumed) = Vec::<u8>::decode(&buf).unwrap();
         assert_eq!(decoded, original);
         assert_eq!(consumed, 8);
     }
 
     #[test]
-    fn wire_encode_decode_string() {
+    fn encode_decode_string() {
         let original = String::from("conduit transport layer");
         let mut buf = Vec::new();
-        original.wire_encode(&mut buf);
+        original.encode(&mut buf);
         assert_eq!(buf.len(), 4 + original.len());
-        let (decoded, consumed) = String::wire_decode(&buf).unwrap();
+        let (decoded, consumed) = String::decode(&buf).unwrap();
         assert_eq!(decoded, original);
         assert_eq!(consumed, 4 + original.len());
     }

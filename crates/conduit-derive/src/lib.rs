@@ -1,23 +1,23 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-//! Derive macros for conduit-core's `WireEncode` and `WireDecode` traits.
+//! Derive macros for conduit-core's `Encode` and `Decode` traits.
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
-/// Derive the `WireEncode` trait for a struct with named fields.
+/// Derive the `Encode` trait for a struct with named fields.
 ///
-/// Generates a `conduit_core::WireEncode` implementation that encodes each
+/// Generates a `conduit_core::Encode` implementation that encodes each
 /// field in declaration order by delegating to the field type's own
-/// `WireEncode` impl.
+/// `Encode` impl.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use conduit_derive::WireEncode;
+/// use conduit_derive::Encode;
 ///
-/// #[derive(WireEncode)]
+/// #[derive(Encode)]
 /// struct MarketTick {
 ///     timestamp: i64,
 ///     price: f64,
@@ -25,7 +25,7 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 ///     side: u8,
 /// }
 /// ```
-#[proc_macro_derive(WireEncode)]
+#[proc_macro_derive(Encode)]
 pub fn derive_wire_encode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match impl_wire_encode(&input) {
@@ -34,18 +34,18 @@ pub fn derive_wire_encode(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Derive the `WireDecode` trait for a struct with named fields.
+/// Derive the `Decode` trait for a struct with named fields.
 ///
-/// Generates a `conduit_core::WireDecode` implementation that decodes each
+/// Generates a `conduit_core::Decode` implementation that decodes each
 /// field in declaration order by delegating to the field type's own
-/// `WireDecode` impl, tracking the cumulative byte offset.
+/// `Decode` impl, tracking the cumulative byte offset.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use conduit_derive::WireDecode;
+/// use conduit_derive::Decode;
 ///
-/// #[derive(WireDecode)]
+/// #[derive(Decode)]
 /// struct MarketTick {
 ///     timestamp: i64,
 ///     price: f64,
@@ -53,7 +53,7 @@ pub fn derive_wire_encode(input: TokenStream) -> TokenStream {
 ///     side: u8,
 /// }
 /// ```
-#[proc_macro_derive(WireDecode)]
+#[proc_macro_derive(Decode)]
 pub fn derive_wire_decode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match impl_wire_decode(&input) {
@@ -71,16 +71,16 @@ fn named_fields(input: &DeriveInput) -> syn::Result<&syn::FieldsNamed> {
             Fields::Named(named) => Ok(named),
             _ => Err(syn::Error::new_spanned(
                 name,
-                "WireEncode / WireDecode can only be derived for structs with named fields",
+                "Encode / Decode can only be derived for structs with named fields",
             )),
         },
         Data::Enum(_) => Err(syn::Error::new_spanned(
             name,
-            "WireEncode / WireDecode cannot be derived for enums",
+            "Encode / Decode cannot be derived for enums",
         )),
         Data::Union(_) => Err(syn::Error::new_spanned(
             name,
-            "WireEncode / WireDecode cannot be derived for unions",
+            "Encode / Decode cannot be derived for unions",
         )),
     }
 }
@@ -91,14 +91,14 @@ fn reject_generics(input: &DeriveInput) -> syn::Result<()> {
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &input.generics,
-            "WireEncode / WireDecode cannot be derived for generic structs",
+            "Encode / Decode cannot be derived for generic structs",
         ));
     }
     Ok(())
 }
 
-/// Generate the `WireEncode` impl: encodes each named field in declaration
-/// order and sums their `wire_size()` for the total.
+/// Generate the `Encode` impl: encodes each named field in declaration
+/// order and sums their `encode_size()` for the total.
 fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     reject_generics(input)?;
     let name = &input.ident;
@@ -110,7 +110,7 @@ fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
         .map(|f| {
             let ident = f.ident.as_ref().unwrap();
             quote! {
-                conduit_core::WireEncode::wire_encode(&self.#ident, buf);
+                conduit_core::Encode::encode(&self.#ident, buf);
             }
         })
         .collect();
@@ -121,12 +121,12 @@ fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
         .map(|f| {
             let ident = f.ident.as_ref().unwrap();
             quote! {
-                conduit_core::WireEncode::wire_size(&self.#ident)
+                conduit_core::Encode::encode_size(&self.#ident)
             }
         })
         .collect();
 
-    // Handle the zero-field edge case: wire_size returns 0.
+    // Handle the zero-field edge case: encode_size returns 0.
     let size_expr = if size_terms.is_empty() {
         quote! { 0 }
     } else {
@@ -136,19 +136,19 @@ fn impl_wire_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
     };
 
     Ok(quote! {
-        impl conduit_core::WireEncode for #name {
-            fn wire_encode(&self, buf: &mut Vec<u8>) {
+        impl conduit_core::Encode for #name {
+            fn encode(&self, buf: &mut Vec<u8>) {
                 #(#encode_stmts)*
             }
 
-            fn wire_size(&self) -> usize {
+            fn encode_size(&self) -> usize {
                 #size_expr
             }
         }
     })
 }
 
-/// Generate the `WireDecode` impl: decodes each named field in declaration
+/// Generate the `Decode` impl: decodes each named field in declaration
 /// order, tracking the cumulative byte offset through the input slice.
 fn impl_wire_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     reject_generics(input)?;
@@ -161,7 +161,7 @@ fn impl_wire_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
         .map(|f| {
             let ident = f.ident.as_ref().unwrap();
             quote! {
-                let (#ident, __n) = conduit_core::WireDecode::wire_decode(&__data[__offset..])?;
+                let (#ident, __n) = conduit_core::Decode::decode(&__data[__offset..])?;
                 __offset += __n;
             }
         })
@@ -174,8 +174,8 @@ fn impl_wire_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
         .collect();
 
     Ok(quote! {
-        impl conduit_core::WireDecode for #name {
-            fn wire_decode(__data: &[u8]) -> Option<(Self, usize)> {
+        impl conduit_core::Decode for #name {
+            fn decode(__data: &[u8]) -> Option<(Self, usize)> {
                 let mut __offset = 0usize;
                 #(#decode_stmts)*
                 Some((Self { #(#field_names),* }, __offset))

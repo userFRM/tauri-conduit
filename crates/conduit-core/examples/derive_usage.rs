@@ -1,6 +1,6 @@
 //! Derive macro usage example for conduit-core + conduit-derive.
 //!
-//! Demonstrates WireEncode/WireDecode derive macros for struct serialization:
+//! Demonstrates Encode/Decode derive macros for struct serialization:
 //!
 //! 1. Define a MarketTick struct with derive macros
 //! 2. Encode it and show the byte count
@@ -10,10 +10,10 @@
 //! Run with: cargo run --example derive_usage -p conduit-core
 
 use conduit_core::{
-    FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, WireDecode, WireEncode,
-    frame_unwrap, frame_wrap,
+    FRAME_HEADER_SIZE, FrameHeader, MsgType, PROTOCOL_VERSION, Decode, Encode,
+    frame_unpack, frame_pack,
 };
-use conduit_derive::{WireDecode, WireEncode};
+use conduit_derive::{Decode, Encode};
 
 // ---------------------------------------------------------------------------
 // Step 1: Define structs with derive macros
@@ -22,9 +22,9 @@ use conduit_derive::{WireDecode, WireEncode};
 /// A market data tick -- the kind of struct you'd stream at high frequency
 /// through the ring buffer.
 ///
-/// The derive macros generate `WireEncode` and `WireDecode` impls that
+/// The derive macros generate `Encode` and `Decode` impls that
 /// encode/decode each field in declaration order using little-endian binary.
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct MarketTick {
     /// Unix timestamp in microseconds.
     timestamp: i64,
@@ -37,7 +37,7 @@ struct MarketTick {
 }
 
 /// An order book level with variable-length symbol name.
-#[derive(Debug, PartialEq, WireEncode, WireDecode)]
+#[derive(Debug, PartialEq, Encode, Decode)]
 struct OrderBookLevel {
     /// Trading pair symbol (variable-length, 4-byte length prefix on wire).
     symbol: String,
@@ -70,8 +70,8 @@ fn main() {
 
     println!("  Original: {tick:?}");
 
-    // wire_size() tells you the exact byte count before encoding.
-    let predicted_size = tick.wire_size();
+    // encode_size() tells you the exact byte count before encoding.
+    let predicted_size = tick.encode_size();
     println!("  Predicted wire size: {predicted_size} bytes");
     println!("    i64 (timestamp) = 8 bytes");
     println!("    f64 (price)     = 8 bytes");
@@ -82,7 +82,7 @@ fn main() {
 
     // Encode to bytes.
     let mut buf = Vec::new();
-    tick.wire_encode(&mut buf);
+    tick.encode(&mut buf);
     println!("  Encoded: {} bytes", buf.len());
     println!("  Raw hex: {:02X?}", buf);
     assert_eq!(buf.len(), predicted_size);
@@ -92,7 +92,7 @@ fn main() {
     // -----------------------------------------------------------------------
     println!("\n--- Step 3: Decode and verify roundtrip ---\n");
 
-    let (decoded, consumed) = MarketTick::wire_decode(&buf).unwrap();
+    let (decoded, consumed) = MarketTick::decode(&buf).unwrap();
     println!("  Decoded: {decoded:?}");
     println!("  Bytes consumed: {consumed}");
     assert_eq!(decoded, tick);
@@ -106,13 +106,13 @@ fn main() {
 
     let header = FrameHeader {
         version: PROTOCOL_VERSION,
-        transport_tier: 0,
+        reserved: 0,
         msg_type: MsgType::Push,
         sequence: 42,
         payload_len: buf.len() as u32,
     };
 
-    let frame = frame_wrap(&header, &buf);
+    let frame = frame_pack(&header, &buf);
     println!(
         "  Frame: {} bytes (header {} + payload {})",
         frame.len(),
@@ -121,8 +121,8 @@ fn main() {
     );
 
     // Unwrap the frame and decode the MarketTick from the payload.
-    let (parsed_header, payload) = frame_unwrap(&frame).expect("frame_unwrap failed");
-    let (parsed_tick, _) = MarketTick::wire_decode(payload).expect("wire_decode failed");
+    let (parsed_header, payload) = frame_unpack(&frame).expect("frame_unpack failed");
+    let (parsed_tick, _) = MarketTick::decode(payload).expect("decode failed");
 
     assert_eq!(parsed_header.msg_type, MsgType::Push);
     assert_eq!(parsed_header.sequence, 42);
@@ -148,7 +148,7 @@ fn main() {
 
     println!("  Original: {level:?}");
 
-    let size = level.wire_size();
+    let size = level.encode_size();
     println!("  Wire size: {size} bytes");
     println!("    String \"BTC/USD\" = 4 (length prefix) + 7 (UTF-8) = 11 bytes");
     println!("    f64 x4           = 32 bytes");
@@ -157,9 +157,9 @@ fn main() {
     assert_eq!(size, 47);
 
     let mut level_buf = Vec::new();
-    level.wire_encode(&mut level_buf);
+    level.encode(&mut level_buf);
 
-    let (decoded_level, consumed) = OrderBookLevel::wire_decode(&level_buf).unwrap();
+    let (decoded_level, consumed) = OrderBookLevel::decode(&level_buf).unwrap();
     assert_eq!(decoded_level, level);
     assert_eq!(consumed, level_buf.len());
     println!("  Roundtrip verified: {} bytes consumed", consumed);
@@ -170,18 +170,18 @@ fn main() {
     println!("\n--- Bonus: Back-to-back encoding ---\n");
 
     let mut combined = Vec::new();
-    tick.wire_encode(&mut combined);
-    level.wire_encode(&mut combined);
+    tick.encode(&mut combined);
+    level.encode(&mut combined);
     println!(
         "  Combined buffer: {} bytes (tick {} + level {})",
         combined.len(),
-        tick.wire_size(),
-        level.wire_size()
+        tick.encode_size(),
+        level.encode_size()
     );
 
     // Decode them sequentially.
-    let (t, t_len) = MarketTick::wire_decode(&combined).unwrap();
-    let (l, l_len) = OrderBookLevel::wire_decode(&combined[t_len..]).unwrap();
+    let (t, t_len) = MarketTick::decode(&combined).unwrap();
+    let (l, l_len) = OrderBookLevel::decode(&combined[t_len..]).unwrap();
     assert_eq!(t, tick);
     assert_eq!(l, level);
     assert_eq!(t_len + l_len, combined.len());

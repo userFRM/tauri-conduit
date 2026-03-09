@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
-//! # conduit-tauri
+//! # tauri-plugin-conduit
 //!
 //! Tauri v2 plugin for conduit — binary IPC over the `conduit://` custom
 //! protocol.
@@ -13,7 +13,7 @@
 //! ```rust,ignore
 //! tauri::Builder::default()
 //!     .plugin(
-//!         conduit_tauri::init()
+//!         tauri_plugin_conduit::init()
 //!             .command("ping", |_| b"pong".to_vec())
 //!             .command("get_ticks", handle_ticks)
 //!             .channel("telemetry")           // ring buffer for streaming
@@ -26,9 +26,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use conduit_core::{ConduitRingBuffer, DispatchTable};
+use conduit_core::{RingBuffer, Router};
 use subtle::ConstantTimeEq;
-use tauri::plugin::{Builder as PluginBuilder, TauriPlugin};
+use tauri::plugin::{Builder as TauriPluginBuilder, TauriPlugin};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 // ---------------------------------------------------------------------------
@@ -76,17 +76,17 @@ impl std::fmt::Debug for BootstrapInfo {
 }
 
 // ---------------------------------------------------------------------------
-// ConduitState — managed Tauri state
+// PluginState — managed Tauri state
 // ---------------------------------------------------------------------------
 
 /// Shared state for the conduit Tauri plugin.
 ///
 /// Holds the dispatch table, named ring buffer channels, the per-launch
 /// invoke key, and the app handle for emitting push notifications.
-pub struct ConduitState<R: Runtime> {
-    dispatch: Arc<DispatchTable>,
+pub struct PluginState<R: Runtime> {
+    dispatch: Arc<Router>,
     /// Named ring buffer channels for server→client streaming.
-    channels: HashMap<String, Arc<ConduitRingBuffer>>,
+    channels: HashMap<String, Arc<RingBuffer>>,
     /// Tauri app handle for emitting events to the frontend.
     app_handle: AppHandle<R>,
     /// Per-launch invoke key (hex-encoded, 64 hex chars = 32 bytes).
@@ -95,18 +95,18 @@ pub struct ConduitState<R: Runtime> {
     invoke_key_bytes: [u8; 32],
 }
 
-impl<R: Runtime> std::fmt::Debug for ConduitState<R> {
+impl<R: Runtime> std::fmt::Debug for PluginState<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConduitState")
+        f.debug_struct("PluginState")
             .field("channels", &self.channels.keys().collect::<Vec<_>>())
             .field("invoke_key", &"[REDACTED]")
             .finish()
     }
 }
 
-impl<R: Runtime> ConduitState<R> {
+impl<R: Runtime> PluginState<R> {
     /// Get a ring buffer channel by name (for pushing data from Rust handlers).
-    pub fn channel(&self, name: &str) -> Option<&Arc<ConduitRingBuffer>> {
+    pub fn channel(&self, name: &str) -> Option<&Arc<RingBuffer>> {
         self.channels.get(name)
     }
 
@@ -155,7 +155,7 @@ impl<R: Runtime> ConduitState<R> {
 /// custom protocol.
 #[tauri::command]
 fn conduit_bootstrap(
-    state: tauri::State<'_, ConduitState<tauri::Wry>>,
+    state: tauri::State<'_, PluginState<tauri::Wry>>,
 ) -> Result<BootstrapInfo, String> {
     Ok(BootstrapInfo {
         protocol_base: "conduit://localhost".to_string(),
@@ -169,7 +169,7 @@ fn conduit_bootstrap(
 /// via `conduit:data-available` events + protocol drain.
 #[tauri::command]
 fn conduit_subscribe(
-    state: tauri::State<'_, ConduitState<tauri::Wry>>,
+    state: tauri::State<'_, PluginState<tauri::Wry>>,
     channels: Vec<String>,
 ) -> Result<Vec<String>, String> {
     // Validate that all requested channels exist.
@@ -187,22 +187,22 @@ fn conduit_subscribe(
 // ---------------------------------------------------------------------------
 
 /// A deferred command registration closure.
-type CommandRegistration = Box<dyn FnOnce(&DispatchTable) + Send>;
+type CommandRegistration = Box<dyn FnOnce(&Router) + Send>;
 
 /// Builder for the conduit Tauri v2 plugin.
 ///
 /// Collects command registrations and configuration, then produces a
 /// [`TauriPlugin`] via [`build`](Self::build).
-pub struct ConduitPluginBuilder {
+pub struct PluginBuilder {
     /// Deferred command registrations: (name, handler factory).
     commands: Vec<CommandRegistration>,
     /// Named ring buffer channels: (name, capacity in bytes).
     channel_defs: Vec<(String, usize)>,
 }
 
-impl std::fmt::Debug for ConduitPluginBuilder {
+impl std::fmt::Debug for PluginBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConduitPluginBuilder")
+        f.debug_struct("PluginBuilder")
             .field("commands", &self.commands.len())
             .field("channel_defs", &self.channel_defs)
             .finish()
@@ -212,7 +212,7 @@ impl std::fmt::Debug for ConduitPluginBuilder {
 /// Default ring buffer capacity (64 KB).
 const DEFAULT_CHANNEL_CAPACITY: usize = 64 * 1024;
 
-impl ConduitPluginBuilder {
+impl PluginBuilder {
     /// Create a new, empty plugin builder.
     pub fn new() -> Self {
         Self {
@@ -231,7 +231,7 @@ impl ConduitPluginBuilder {
         F: Fn(Vec<u8>) -> Vec<u8> + Send + Sync + 'static,
     {
         let name = name.into();
-        self.commands.push(Box::new(move |table: &DispatchTable| {
+        self.commands.push(Box::new(move |table: &Router| {
             table.register(name, handler);
         }));
         self
@@ -261,11 +261,11 @@ impl ConduitPluginBuilder {
         let commands = self.commands;
         let channel_defs = self.channel_defs;
 
-        PluginBuilder::<R>::new("conduit")
+        TauriPluginBuilder::<R>::new("conduit")
             // --- Custom protocol: conduit://localhost/invoke/<cmd> ---
             .register_uri_scheme_protocol("conduit", move |ctx, request| {
-                // Extract the managed ConduitState from the app handle.
-                let state: tauri::State<'_, ConduitState<R>> = ctx.app_handle().state();
+                // Extract the managed PluginState from the app handle.
+                let state: tauri::State<'_, PluginState<R>> = ctx.app_handle().state();
 
                 let url = request.uri().to_string();
 
@@ -311,7 +311,7 @@ impl ConduitPluginBuilder {
                         let dispatch = Arc::clone(&state.dispatch);
                         let result = std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(|| {
-                                dispatch.dispatch_or_error_bytes(target, body)
+                                dispatch.call_or_error_bytes(target, body)
                             })
                         );
 
@@ -344,7 +344,7 @@ impl ConduitPluginBuilder {
             ])
             // --- Plugin setup: create state, register commands ---
             .setup(move |app, _api| {
-                let dispatch = Arc::new(DispatchTable::new());
+                let dispatch = Arc::new(Router::new());
 
                 // Register all commands that were added via the builder.
                 for register_fn in commands {
@@ -354,7 +354,7 @@ impl ConduitPluginBuilder {
                 // Create named ring buffer channels.
                 let mut channels = HashMap::new();
                 for (name, capacity) in channel_defs {
-                    channels.insert(name, Arc::new(ConduitRingBuffer::new(capacity)));
+                    channels.insert(name, Arc::new(RingBuffer::new(capacity)));
                 }
 
                 // Generate the per-launch invoke key.
@@ -364,7 +364,7 @@ impl ConduitPluginBuilder {
                 // Obtain the app handle for emitting events.
                 let app_handle = app.app_handle().clone();
 
-                let state = ConduitState {
+                let state = PluginState {
                     dispatch,
                     channels,
                     app_handle,
@@ -380,7 +380,7 @@ impl ConduitPluginBuilder {
     }
 }
 
-impl Default for ConduitPluginBuilder {
+impl Default for PluginBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -397,7 +397,7 @@ impl Default for ConduitPluginBuilder {
 /// ```rust,ignore
 /// tauri::Builder::default()
 ///     .plugin(
-///         conduit_tauri::init()
+///         tauri_plugin_conduit::init()
 ///             .command("ping", |_| b"pong".to_vec())
 ///             .channel("telemetry")
 ///             .build()
@@ -405,8 +405,8 @@ impl Default for ConduitPluginBuilder {
 ///     .run(tauri::generate_context!())
 ///     .unwrap();
 /// ```
-pub fn init() -> ConduitPluginBuilder {
-    ConduitPluginBuilder::new()
+pub fn init() -> PluginBuilder {
+    PluginBuilder::new()
 }
 
 // ---------------------------------------------------------------------------

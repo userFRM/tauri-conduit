@@ -5,16 +5,16 @@
 [![CI](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/conduit-derive.svg)](https://github.com/userFRM/tauri-conduit#license)
 
-Derive macros for [conduit-core](https://crates.io/crates/conduit-core): `WireEncode` and `WireDecode`.
+Derive macros for [conduit-core](https://crates.io/crates/conduit-core): `Encode` and `Decode`.
 
 Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace.
 
 ## Usage
 
 ```rust
-use conduit_derive::{WireEncode, WireDecode};
+use conduit_derive::{Encode, Decode};
 
-#[derive(WireEncode, WireDecode)]
+#[derive(Encode, Decode)]
 struct MarketTick {
     timestamp: i64,
     price: f64,

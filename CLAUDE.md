@@ -15,21 +15,21 @@ crates/
   conduit-core/            Core library
     src/
       lib.rs                 Public API re-exports
-      codec.rs               11-byte frame header, WireEncode/WireDecode traits
+      codec.rs               11-byte frame header, Encode/Decode traits
       error.rs               Error types
-      router.rs              DispatchTable (synchronous command registry)
+      router.rs              Router (synchronous command registry)
       ringbuf.rs             In-process ring buffer for streaming
     benches/
       codec_bench.rs         Frame + wire encoding benchmarks
       ringbuf_bench.rs       Ring buffer throughput + contention benchmarks
       dispatch_bench.rs      Command dispatch benchmarks
-      comparison_bench.rs    JSON (serde) vs binary (conduit) head-to-head
+      comparison_bench.rs    Tauri vs Level 1 vs Level 2 head-to-head
   conduit-derive/           Proc macros
-    src/lib.rs               #[derive(WireEncode, WireDecode)]
-  conduit-tauri/            Tauri v2 plugin
+    src/lib.rs               #[derive(Encode, Decode)]
+  tauri-plugin-conduit/     Tauri v2 plugin
     src/lib.rs               Plugin builder, custom protocol handler, subscribe command
 packages/
-  tauri-conduit/            TypeScript client (@tauri-conduit/client)
+  tauri-plugin-conduit/     TypeScript client (tauri-plugin-conduit)
     src/
       index.ts               Drop-in invoke(), connect(), subscribe(), drain()
       negotiate.ts           Bootstrap (obtains invoke key + channel list)
@@ -43,12 +43,13 @@ packages/
 | Type | Crate | Purpose |
 |---|---|---|
 | `Conduit` | TS client | Main client interface: `invoke()`, `invokeBinary()`, `subscribe()`, `drain()` |
-| `ConduitState<R>` | conduit-tauri | Managed Tauri state: dispatch table, ring buffers, invoke key, app handle |
-| `ConduitPluginBuilder` | conduit-tauri | Builder: `.command()`, `.channel()`, `.build()` |
-| `DispatchTable` | conduit-core | Named synchronous command handlers (payload in, payload out) |
-| `ConduitRingBuffer` | conduit-core | Thread-safe circular buffer with lossy back-pressure |
+| `PluginState<R>` | tauri-plugin-conduit | Managed Tauri state: router, ring buffers, invoke key, app handle |
+| `PluginBuilder` | tauri-plugin-conduit | Builder: `.command()`, `.channel()`, `.build()` |
+| `Router` | conduit-core | Named synchronous command handlers (payload in, payload out) |
+| `RingBuffer` | conduit-core | Thread-safe circular buffer with lossy back-pressure |
 | `FrameHeader` | conduit-core | 11-byte frame header for all conduit messages |
-| `WireEncode` / `WireDecode` | conduit-core | Traits for binary serialization of fixed-layout structs |
+| `Encode` / `Decode` | conduit-core | Traits for binary serialization of fixed-layout structs |
+| `Error` | conduit-core | Error types (`UnknownCommand`, `PayloadTooLarge`, `AuthFailed`, `Json`) |
 
 ## Streaming / push model
 
@@ -64,7 +65,7 @@ The ring buffer is lossy -- when the byte budget is exceeded, the oldest frames 
 
 ```
 [u8  version]           always 1
-[u8  transport_tier]    0=protocol (reserved)
+[u8  reserved]          0 (reserved for future use)
 [u8  msg_type]          0x00=Request, 0x01=Response, 0x02=Push, 0x04=Error
 [u32 sequence]          LE, monotonic
 [u32 payload_len]       LE, byte count
@@ -79,7 +80,7 @@ Everything runs in-process. No network endpoints.
 - **Panic isolation** -- handler panics caught via `catch_unwind`, returned as 500 errors
 - **Capability-based ACL** -- integrates with Tauri's permission system
 - **CSP compliance** -- no CSP exceptions required
-- **Trust boundary** -- frontend communicates only through dispatch table
+- **Trust boundary** -- frontend communicates only through router
 
 ## Build, test, bench
 
@@ -87,7 +88,7 @@ Everything runs in-process. No network endpoints.
 cargo test --workspace
 cargo clippy --workspace                            # zero warnings
 cd crates/conduit-core && cargo bench               # all benchmarks
-cd crates/conduit-core && cargo bench -- comparison  # JSON vs binary head-to-head
+cd crates/conduit-core && cargo bench -- comparison  # Tauri vs Level 1 vs Level 2
 ```
 
 ## Relationship to tauri-wire

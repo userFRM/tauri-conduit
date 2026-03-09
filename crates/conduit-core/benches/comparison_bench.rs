@@ -9,9 +9,9 @@
 //!   No intermediate Value representation. Same JSON, less overhead.
 //!
 //! - **conduit Level 2 (binary)**: raw bytes arrive at the handler via
-//!   WireDecode → process → WireEncode. No JSON anywhere in the path.
+//!   Decode → process → Encode. No JSON anywhere in the path.
 
-use conduit_core::{DispatchTable, WireDecode, WireEncode};
+use conduit_core::{Router, Decode, Encode};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 // ── Shared struct ────────────────────────────────────────────────
@@ -24,29 +24,29 @@ struct MarketTick {
     side: u8,
 }
 
-// Manual WireEncode/WireDecode to avoid proc-macro dep in benchmarks.
-impl WireEncode for MarketTick {
-    fn wire_encode(&self, buf: &mut Vec<u8>) {
-        self.timestamp.wire_encode(buf);
-        self.price.wire_encode(buf);
-        self.volume.wire_encode(buf);
-        self.side.wire_encode(buf);
+// Manual Encode/Decode to avoid proc-macro dep in benchmarks.
+impl Encode for MarketTick {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        self.timestamp.encode(buf);
+        self.price.encode(buf);
+        self.volume.encode(buf);
+        self.side.encode(buf);
     }
-    fn wire_size(&self) -> usize {
+    fn encode_size(&self) -> usize {
         8 + 8 + 8 + 1 // 25 bytes
     }
 }
 
-impl WireDecode for MarketTick {
-    fn wire_decode(data: &[u8]) -> Option<(Self, usize)> {
+impl Decode for MarketTick {
+    fn decode(data: &[u8]) -> Option<(Self, usize)> {
         let mut off = 0;
-        let (timestamp, n) = i64::wire_decode(&data[off..])?;
+        let (timestamp, n) = i64::decode(&data[off..])?;
         off += n;
-        let (price, n) = f64::wire_decode(&data[off..])?;
+        let (price, n) = f64::decode(&data[off..])?;
         off += n;
-        let (volume, n) = f64::wire_decode(&data[off..])?;
+        let (volume, n) = f64::decode(&data[off..])?;
         off += n;
-        let (side, n) = u8::wire_decode(&data[off..])?;
+        let (side, n) = u8::decode(&data[off..])?;
         off += n;
         Some((
             Self {
@@ -74,7 +74,7 @@ fn tick() -> MarketTick {
 fn level_comparison_struct(c: &mut Criterion) {
     let mut group = c.benchmark_group("25B struct roundtrip");
 
-    let table = DispatchTable::new();
+    let table = Router::new();
 
     // Tauri-style handler: receives JSON string as bytes, goes through Value
     table.register("tauri_echo", |payload: Vec<u8>| {
@@ -96,23 +96,23 @@ fn level_comparison_struct(c: &mut Criterion) {
 
     // conduit Level 2: receives binary, decodes directly
     table.register("conduit_l2_echo", |payload: Vec<u8>| {
-        let (tick, _) = MarketTick::wire_decode(&payload).unwrap();
+        let (tick, _) = MarketTick::decode(&payload).unwrap();
         // Handler processes...
-        let mut out = Vec::with_capacity(tick.wire_size());
-        tick.wire_encode(&mut out);
+        let mut out = Vec::with_capacity(tick.encode_size());
+        tick.encode(&mut out);
         out
     });
 
     let t = tick();
     let json_payload = serde_json::to_vec(&t).unwrap();
     let mut wire_payload = Vec::with_capacity(25);
-    t.wire_encode(&mut wire_payload);
+    t.encode(&mut wire_payload);
 
     group.bench_function("Tauri invoke (JSON via Value)", |b| {
         b.iter_batched(
             || json_payload.clone(),
             |p| {
-                let result = table.dispatch("tauri_echo", p).unwrap();
+                let result = table.call("tauri_echo", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -123,7 +123,7 @@ fn level_comparison_struct(c: &mut Criterion) {
         b.iter_batched(
             || json_payload.clone(),
             |p| {
-                let result = table.dispatch("conduit_l1_echo", p).unwrap();
+                let result = table.call("conduit_l1_echo", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -134,7 +134,7 @@ fn level_comparison_struct(c: &mut Criterion) {
         b.iter_batched(
             || wire_payload.clone(),
             |p| {
-                let result = table.dispatch("conduit_l2_echo", p).unwrap();
+                let result = table.call("conduit_l2_echo", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -149,7 +149,7 @@ fn level_comparison_struct(c: &mut Criterion) {
 fn level_comparison_1kb(c: &mut Criterion) {
     let mut group = c.benchmark_group("1KB payload roundtrip");
 
-    let table = DispatchTable::new();
+    let table = Router::new();
 
     // Tauri: JSON string → Value → Vec<u8> → Value → JSON string
     table.register("tauri_1kb", |payload: Vec<u8>| {
@@ -175,7 +175,7 @@ fn level_comparison_1kb(c: &mut Criterion) {
         b.iter_batched(
             || json_payload.clone(),
             |p| {
-                let result = table.dispatch("tauri_1kb", p).unwrap();
+                let result = table.call("tauri_1kb", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -186,7 +186,7 @@ fn level_comparison_1kb(c: &mut Criterion) {
         b.iter_batched(
             || json_payload.clone(),
             |p| {
-                let result = table.dispatch("conduit_l1_1kb", p).unwrap();
+                let result = table.call("conduit_l1_1kb", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -197,7 +197,7 @@ fn level_comparison_1kb(c: &mut Criterion) {
         b.iter_batched(
             || data_1k.clone(),
             |p| {
-                let result = table.dispatch("conduit_l2_1kb", p).unwrap();
+                let result = table.call("conduit_l2_1kb", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -212,7 +212,7 @@ fn level_comparison_1kb(c: &mut Criterion) {
 fn level_comparison_64kb(c: &mut Criterion) {
     let mut group = c.benchmark_group("64KB payload roundtrip");
 
-    let table = DispatchTable::new();
+    let table = Router::new();
 
     table.register("tauri_64kb", |payload: Vec<u8>| {
         let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
@@ -235,7 +235,7 @@ fn level_comparison_64kb(c: &mut Criterion) {
         b.iter_batched(
             || json_payload.clone(),
             |p| {
-                let result = table.dispatch("tauri_64kb", p).unwrap();
+                let result = table.call("tauri_64kb", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -246,7 +246,7 @@ fn level_comparison_64kb(c: &mut Criterion) {
         b.iter_batched(
             || json_payload.clone(),
             |p| {
-                let result = table.dispatch("conduit_l1_64kb", p).unwrap();
+                let result = table.call("conduit_l1_64kb", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
@@ -257,7 +257,7 @@ fn level_comparison_64kb(c: &mut Criterion) {
         b.iter_batched(
             || data_64k.clone(),
             |p| {
-                let result = table.dispatch("conduit_l2_64kb", p).unwrap();
+                let result = table.call("conduit_l2_64kb", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,

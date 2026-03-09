@@ -1,9 +1,9 @@
-# conduit-tauri
+# tauri-plugin-conduit
 
-[![Crates.io](https://img.shields.io/crates/v/conduit-tauri.svg)](https://crates.io/crates/conduit-tauri)
-[![docs.rs](https://docs.rs/conduit-tauri/badge.svg)](https://docs.rs/conduit-tauri)
+[![Crates.io](https://img.shields.io/crates/v/tauri-plugin-conduit.svg)](https://crates.io/crates/tauri-plugin-conduit)
+[![docs.rs](https://docs.rs/tauri-plugin-conduit/badge.svg)](https://docs.rs/tauri-plugin-conduit)
 [![CI](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml)
-[![License](https://img.shields.io/crates/l/conduit-tauri.svg)](https://github.com/userFRM/tauri-conduit#license)
+[![License](https://img.shields.io/crates/l/tauri-plugin-conduit.svg)](https://github.com/userFRM/tauri-conduit#license)
 
 Tauri v2 plugin for [conduit](https://github.com/userFRM/tauri-conduit) -- binary IPC over the `conduit://` custom protocol.
 
@@ -14,7 +14,7 @@ Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace.
 ```rust
 tauri::Builder::default()
     .plugin(
-        conduit_tauri::init()
+        tauri_plugin_conduit::init()
             .command("ping", |_| b"pong".to_vec())
             .channel("telemetry")
             .build()

@@ -1,11 +1,11 @@
-# @tauri-conduit/client
+# tauri-plugin-conduit
 
 High-performance binary IPC client for Tauri v2.
 
 ## Install
 
 ```sh
-npm install @tauri-conduit/client
+npm install tauri-plugin-conduit
 ```
 
 ## Quick Start
@@ -13,7 +13,7 @@ npm install @tauri-conduit/client
 Drop-in replacement for `@tauri-apps/api/core`:
 
 ```typescript
-import { invoke } from '@tauri-conduit/client';
+import { invoke } from 'tauri-plugin-conduit';
 
 const result = await invoke<MyType>('my_command', { key: 'value' });
 ```
@@ -21,7 +21,7 @@ const result = await invoke<MyType>('my_command', { key: 'value' });
 Binary payloads:
 
 ```typescript
-import { connect } from '@tauri-conduit/client';
+import { connect } from 'tauri-plugin-conduit';
 
 const conduit = await connect();
 const buf = await conduit.invokeBinary('raw_cmd', new Uint8Array([1, 2, 3]));
@@ -30,7 +30,7 @@ const buf = await conduit.invokeBinary('raw_cmd', new Uint8Array([1, 2, 3]));
 Push streaming:
 
 ```typescript
-import { subscribe } from '@tauri-conduit/client';
+import { subscribe } from 'tauri-plugin-conduit';
 
 const unsub = await subscribe('telemetry', (buf) => {
   // Parse binary frames from buf...

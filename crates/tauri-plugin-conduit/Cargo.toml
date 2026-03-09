@@ -1,10 +1,10 @@
 [package]
-name = "conduit-tauri"
-version = "0.1.0"
+name = "tauri-plugin-conduit"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Tauri v2 plugin for conduit — binary IPC over the conduit:// custom protocol."
+description = "tauri-plugin-conduit — Tauri v2 plugin for binary IPC over the conduit:// custom protocol."
 keywords = ["tauri", "ipc", "plugin", "binary"]
 categories = ["gui", "web-programming"]
 repository = "https://github.com/userFRM/tauri-conduit"
@@ -12,7 +12,7 @@ homepage = "https://github.com/userFRM/tauri-conduit"
 readme = "README.md"
 
 [dependencies]
-conduit-core = { version = "0.1.0", path = "../conduit-core" }
+conduit-core = { version = "0.2.0", path = "../conduit-core" }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin = { version = "2", features = ["build"] }
 serde = { version = "1", features = ["derive"] }

@@ -1,5 +1,5 @@
 /**
- * @tauri-conduit/client
+ * tauri-plugin-conduit
  *
  * High-performance binary IPC client for Tauri v2.
  *
@@ -12,14 +12,14 @@
  * @example
  * ```typescript
  * // Drop-in replacement for @tauri-apps/api/core invoke()
- * import { invoke } from '@tauri-conduit/client';
+ * import { invoke } from 'tauri-plugin-conduit';
  * const result = await invoke<MyType>('my_command', { key: 'value' });
  * ```
  *
  * @example
  * ```typescript
  * // Push streaming — event-driven, no polling
- * import { subscribe } from '@tauri-conduit/client';
+ * import { subscribe } from 'tauri-plugin-conduit';
  * const unsub = await subscribe('market-data', (buf) => {
  *   // Parse binary frames from buf...
  * });
@@ -28,7 +28,7 @@
  * @example
  * ```typescript
  * // Full control with connect()
- * import { connect } from '@tauri-conduit/client';
+ * import { connect } from 'tauri-plugin-conduit';
  * const conduit = await connect();
  * const buf = await conduit.invokeBinary('raw_cmd', new Uint8Array([1, 2, 3]));
  * const unsub = await conduit.subscribe('telemetry', onData);
@@ -43,7 +43,7 @@ import { createProtocolTransport, type ProtocolTransport } from './transport/pro
 
 export { FRAME_HEADER_SIZE, PROTOCOL_VERSION, MsgType } from './codec/frame.js';
 export type { FrameHeader } from './codec/frame.js';
-export { writeFrameHeader, readFrameHeader } from './codec/frame.js';
+export { packFrame, unpackFrame } from './codec/frame.js';
 export { DEFAULT_TIMEOUT_MS } from './transport/protocol.js';
 export type { ProtocolTransport } from './transport/protocol.js';
 export type { BootstrapInfo } from './negotiate.js';
@@ -90,8 +90,6 @@ export interface Conduit {
    * ```
    */
   subscribe(channel: string, callback: (data: ArrayBuffer) => void): Promise<UnsubscribeFn>;
-  /** Convenience alias for {@link subscribe}. */
-  onData(channel: string, callback: (data: ArrayBuffer) => void): Promise<UnsubscribeFn>;
   /** Available channel names from bootstrap. */
   readonly channels: string[];
   /** Release resources and unsubscribe all listeners. */
@@ -174,8 +172,6 @@ function buildConduit(
     drain: drainChannel,
 
     subscribe: subscribeToChannel,
-
-    onData: subscribeToChannel,
 
     channels: bootstrapInfo.channels ?? [],
 
@@ -276,7 +272,7 @@ export async function drain(channel: string): Promise<ArrayBuffer> {
  *
  * @example
  * ```typescript
- * import { subscribe } from '@tauri-conduit/client';
+ * import { subscribe } from 'tauri-plugin-conduit';
  *
  * const unsub = await subscribe('market-data', (buf) => {
  *   // Parse binary frames...
@@ -291,13 +287,3 @@ export async function subscribe(
   return conduit.subscribe(channel, callback);
 }
 
-/**
- * Convenience alias for {@link subscribe}.
- */
-export async function onData(
-  channel: string,
-  callback: (data: ArrayBuffer) => void,
-): Promise<UnsubscribeFn> {
-  const conduit = await getConduit();
-  return conduit.onData(channel, callback);
-}

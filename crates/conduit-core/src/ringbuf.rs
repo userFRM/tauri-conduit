@@ -1,6 +1,6 @@
 //! In-process ring buffer for high-frequency streaming.
 //!
-//! [`ConduitRingBuffer`] is the breakthrough component of tauri-conduit: an
+//! [`RingBuffer`] is the breakthrough component of tauri-conduit: an
 //! in-process circular buffer that lets the Rust backend stream binary frames
 //! to the WebView frontend without serialization, IPC, or inter-process shared
 //! memory. The custom protocol handler (`conduit://`) reads directly from it.
@@ -78,7 +78,7 @@ impl Inner {
 }
 
 // ---------------------------------------------------------------------------
-// ConduitRingBuffer
+// RingBuffer
 // ---------------------------------------------------------------------------
 
 /// Thread-safe, in-process circular buffer for streaming binary frames.
@@ -92,11 +92,11 @@ impl Inner {
 /// All public methods take `&self` and synchronize via an internal [`Mutex`].
 /// Contention is expected to be low: typically one producer thread and one
 /// consumer (the custom protocol handler draining on a `fetch` call).
-pub struct ConduitRingBuffer {
+pub struct RingBuffer {
     inner: Mutex<Inner>,
 }
 
-impl ConduitRingBuffer {
+impl RingBuffer {
     /// Create a ring buffer with the given byte capacity.
     ///
     /// # Panics
@@ -239,10 +239,10 @@ impl ConduitRingBuffer {
     }
 }
 
-impl std::fmt::Debug for ConduitRingBuffer {
+impl std::fmt::Debug for RingBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = self.inner.lock().expect("ring buffer lock poisoned");
-        f.debug_struct("ConduitRingBuffer")
+        f.debug_struct("RingBuffer")
             .field("frame_count", &inner.frames.len())
             .field("bytes_used", &inner.bytes_used)
             .field("capacity", &inner.capacity)
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn push_and_pop() {
-        let rb = ConduitRingBuffer::new(1024);
+        let rb = RingBuffer::new(1024);
         let _ = rb.push(b"alpha");
         let _ = rb.push(b"beta");
         let _ = rb.push(b"gamma");
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn drain_all_format() {
-        let rb = ConduitRingBuffer::new(1024);
+        let rb = RingBuffer::new(1024);
         let _ = rb.push(b"hello");
         let _ = rb.push(b"world");
 
@@ -303,7 +303,7 @@ mod tests {
         // Capacity for exactly 2 frames of 4 bytes each:
         //   frame cost = 4 (overhead) + 4 (payload) = 8 bytes
         //   2 frames = 16 bytes
-        let rb = ConduitRingBuffer::new(16);
+        let rb = RingBuffer::new(16);
 
         let dropped = rb.push(b"aaaa"); // cost 8, total 8
         assert_eq!(dropped, 0);
@@ -322,14 +322,14 @@ mod tests {
 
     #[test]
     fn empty_drain() {
-        let rb = ConduitRingBuffer::new(1024);
+        let rb = RingBuffer::new(1024);
         let blob = rb.drain_all();
         assert!(blob.is_empty());
     }
 
     #[test]
     fn frame_count_and_bytes() {
-        let rb = ConduitRingBuffer::new(1024);
+        let rb = RingBuffer::new(1024);
 
         assert_eq!(rb.frame_count(), 0);
         assert_eq!(rb.bytes_used(), 0);
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn clear() {
-        let rb = ConduitRingBuffer::new(1024);
+        let rb = RingBuffer::new(1024);
         let _ = rb.push(b"one");
         let _ = rb.push(b"two");
         let _ = rb.push(b"three");
@@ -366,7 +366,7 @@ mod tests {
     async fn concurrent_push_pop() {
         use std::sync::Arc;
 
-        let rb = Arc::new(ConduitRingBuffer::new(64 * 1024));
+        let rb = Arc::new(RingBuffer::new(64 * 1024));
         let rb_producer = Arc::clone(&rb);
         let rb_consumer = Arc::clone(&rb);
 
@@ -410,7 +410,7 @@ mod tests {
     fn single_large_frame() {
         // Buffer capacity is 32 bytes. A frame of 100 bytes costs 104 bytes
         // — larger than capacity. It should be silently discarded.
-        let rb = ConduitRingBuffer::new(32);
+        let rb = RingBuffer::new(32);
         let _ = rb.push(b"ok"); // cost 6, fits
         let dropped = rb.push(&[0xFFu8; 100]); // cost 104, too large
         assert_eq!(dropped, 0); // not counted as "dropped oldest"
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn drain_then_push() {
-        let rb = ConduitRingBuffer::new(1024);
+        let rb = RingBuffer::new(1024);
         let _ = rb.push(b"first");
         let blob = rb.drain_all();
         assert!(!blob.is_empty());
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn overflow_cascade() {
         // Capacity for exactly one 4-byte frame (cost = 8).
-        let rb = ConduitRingBuffer::new(8);
+        let rb = RingBuffer::new(8);
 
         let _ = rb.push(b"aaaa"); // cost 8, fills completely
         assert_eq!(rb.frame_count(), 1);
@@ -454,12 +454,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "capacity must be at least")]
     fn tiny_capacity_panics() {
-        ConduitRingBuffer::new(3); // less than FRAME_OVERHEAD
+        RingBuffer::new(3); // less than FRAME_OVERHEAD
     }
 
     #[test]
     fn with_default_capacity() {
-        let rb = ConduitRingBuffer::with_default_capacity();
+        let rb = RingBuffer::with_default_capacity();
         assert_eq!(rb.capacity(), 64 * 1024);
     }
 }

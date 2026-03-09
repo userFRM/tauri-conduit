@@ -4,8 +4,8 @@ import {
   FRAME_HEADER_SIZE,
   PROTOCOL_VERSION,
   MsgType,
-  writeFrameHeader,
-  readFrameHeader,
+  packFrame,
+  unpackFrame,
 } from '../codec/frame.js';
 
 describe('frame codec', () => {
@@ -24,17 +24,17 @@ describe('frame codec', () => {
     assert.equal(MsgType.Error, 0x04);
   });
 
-  it('writeFrameHeader + readFrameHeader roundtrip', () => {
+  it('packFrame + unpackFrame roundtrip', () => {
     const header = {
       version: PROTOCOL_VERSION,
-      transportTier: 0,
+      reserved: 0,
       msgType: MsgType.Request,
       sequence: 42,
       payloadLen: 128,
     };
     const payload = new Uint8Array(128);
-    const buf = writeFrameHeader(header, payload);
-    const parsed = readFrameHeader(buf);
+    const buf = packFrame(header, payload);
+    const parsed = unpackFrame(buf);
     assert.ok(parsed);
     assert.equal(parsed.header.version, PROTOCOL_VERSION);
     assert.equal(parsed.header.msgType, MsgType.Request);
@@ -42,9 +42,9 @@ describe('frame codec', () => {
     assert.equal(parsed.header.payloadLen, 128);
   });
 
-  it('readFrameHeader returns null for short buffer', () => {
+  it('unpackFrame returns null for short buffer', () => {
     const buf = new ArrayBuffer(5);
-    const parsed = readFrameHeader(buf);
+    const parsed = unpackFrame(buf);
     assert.equal(parsed, null);
   });
 });
