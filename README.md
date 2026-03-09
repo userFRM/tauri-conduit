@@ -246,7 +246,7 @@ sequenceDiagram
 
     JS->>CP: fetch("conduit://…", raw bytes)
     Note over CP: Zero-copy passthrough
-    CP->>H: Raw bytes (Vec&lt;u8&gt;)
+    CP->>H: Raw bytes (Vec of u8)
     H->>CP: Raw bytes
     CP->>JS: ArrayBuffer
 ```
