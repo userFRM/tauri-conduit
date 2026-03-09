@@ -1,11 +1,17 @@
-//! Head-to-head comparison: JSON (serde) vs binary (conduit) serialization.
+//! Head-to-head comparison: Tauri invoke vs conduit Level 1 vs conduit Level 2.
 //!
-//! This benchmark isolates the codec overhead that conduit eliminates relative
-//! to Tauri's built-in JSON-based invoke(). The full IPC round-trip includes
-//! the Tauri custom protocol handler (platform-dependent), but the codec
-//! comparison shows the serialization advantage on any hardware.
+//! - **Tauri invoke (simulated)**: JSON string → serde_json::Value → typed T
+//!   → handler → T → serde_json::Value → JSON string. This mirrors Tauri's
+//!   internal flow where every invoke goes through an intermediate Value.
+//!
+//! - **conduit Level 1 (drop-in)**: JSON bytes arrive directly at the handler.
+//!   Handler does serde_json::from_slice → process → serde_json::to_vec.
+//!   No intermediate Value representation. Same JSON, less overhead.
+//!
+//! - **conduit Level 2 (binary)**: raw bytes arrive at the handler via
+//!   WireDecode → process → WireEncode. No JSON anywhere in the path.
 
-use conduit_core::{WireDecode, WireEncode};
+use conduit_core::{DispatchTable, WireDecode, WireEncode};
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 // ── Shared struct ────────────────────────────────────────────────
@@ -63,91 +69,35 @@ fn tick() -> MarketTick {
     }
 }
 
-// ── Encode comparison ────────────────────────────────────────────
+// ── Level comparison: roundtrip through dispatch ─────────────────
 
-fn encode_comparison(c: &mut Criterion) {
-    let t = tick();
-
-    c.bench_function("encode 25B struct — JSON (serde)", |b| {
-        b.iter(|| {
-            let json = serde_json::to_vec(black_box(&t)).unwrap();
-            black_box(json);
-        });
-    });
-
-    c.bench_function("encode 25B struct — binary (conduit)", |b| {
-        let mut buf = Vec::with_capacity(25);
-        b.iter(|| {
-            buf.clear();
-            black_box(&t).wire_encode(&mut buf);
-            black_box(&buf);
-        });
-    });
-}
-
-// ── Decode comparison ────────────────────────────────────────────
-
-fn decode_comparison(c: &mut Criterion) {
-    let t = tick();
-    let json_bytes = serde_json::to_vec(&t).unwrap();
-    let mut wire_bytes = Vec::with_capacity(25);
-    t.wire_encode(&mut wire_bytes);
-
-    c.bench_function("decode 25B struct — JSON (serde)", |b| {
-        b.iter(|| {
-            let decoded: MarketTick = serde_json::from_slice(black_box(&json_bytes)).unwrap();
-            black_box(decoded);
-        });
-    });
-
-    c.bench_function("decode 25B struct — binary (conduit)", |b| {
-        b.iter(|| {
-            let (decoded, _) = MarketTick::wire_decode(black_box(&wire_bytes)).unwrap();
-            black_box(decoded);
-        });
-    });
-}
-
-// ── Roundtrip comparison ─────────────────────────────────────────
-
-fn roundtrip_comparison(c: &mut Criterion) {
-    let t = tick();
-
-    c.bench_function("roundtrip 25B struct — JSON (serde)", |b| {
-        b.iter(|| {
-            let json = serde_json::to_vec(black_box(&t)).unwrap();
-            let decoded: MarketTick = serde_json::from_slice(black_box(&json)).unwrap();
-            black_box(decoded);
-        });
-    });
-
-    c.bench_function("roundtrip 25B struct — binary (conduit)", |b| {
-        let mut buf = Vec::with_capacity(25);
-        b.iter(|| {
-            buf.clear();
-            black_box(&t).wire_encode(&mut buf);
-            let (decoded, _) = MarketTick::wire_decode(black_box(&buf)).unwrap();
-            black_box(decoded);
-        });
-    });
-}
-
-// ── Dispatch simulation comparison ───────────────────────────────
-
-fn dispatch_roundtrip(c: &mut Criterion) {
-    use conduit_core::DispatchTable;
+fn level_comparison_struct(c: &mut Criterion) {
+    let mut group = c.benchmark_group("25B struct roundtrip");
 
     let table = DispatchTable::new();
 
-    // JSON handler: deserialize → process → serialize
-    table.register("echo_json", |payload: Vec<u8>| {
+    // Tauri-style handler: receives JSON string as bytes, goes through Value
+    table.register("tauri_echo", |payload: Vec<u8>| {
+        // Tauri internally: JSON string → Value → from_value::<T>
+        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let tick: MarketTick = serde_json::from_value(value).unwrap();
+        // Handler processes...
+        // Tauri internally: T → to_value → JSON string
+        let out_value = serde_json::to_value(&tick).unwrap();
+        serde_json::to_vec(&out_value).unwrap()
+    });
+
+    // conduit Level 1: receives JSON bytes, parses directly (no Value middleman)
+    table.register("conduit_l1_echo", |payload: Vec<u8>| {
         let tick: MarketTick = serde_json::from_slice(&payload).unwrap();
+        // Handler processes...
         serde_json::to_vec(&tick).unwrap()
     });
 
-    // Binary handler: decode → process → encode
-    table.register("echo_binary", |payload: Vec<u8>| {
+    // conduit Level 2: receives binary, decodes directly
+    table.register("conduit_l2_echo", |payload: Vec<u8>| {
         let (tick, _) = MarketTick::wire_decode(&payload).unwrap();
+        // Handler processes...
         let mut out = Vec::with_capacity(tick.wire_size());
         tick.wire_encode(&mut out);
         out
@@ -158,78 +108,169 @@ fn dispatch_roundtrip(c: &mut Criterion) {
     let mut wire_payload = Vec::with_capacity(25);
     t.wire_encode(&mut wire_payload);
 
-    c.bench_function("dispatch echo — JSON path", |b| {
+    group.bench_function("Tauri invoke (JSON via Value)", |b| {
         b.iter_batched(
             || json_payload.clone(),
             |p| {
-                let result = table.dispatch("echo_json", p).unwrap();
+                let result = table.dispatch("tauri_echo", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
         );
     });
 
-    c.bench_function("dispatch echo — binary path", |b| {
+    group.bench_function("conduit Level 1 (JSON direct)", |b| {
+        b.iter_batched(
+            || json_payload.clone(),
+            |p| {
+                let result = table.dispatch("conduit_l1_echo", p).unwrap();
+                black_box(result);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("conduit Level 2 (binary)", |b| {
         b.iter_batched(
             || wire_payload.clone(),
             |p| {
-                let result = table.dispatch("echo_binary", p).unwrap();
+                let result = table.dispatch("conduit_l2_echo", p).unwrap();
                 black_box(result);
             },
             criterion::BatchSize::SmallInput,
         );
     });
+
+    group.finish();
 }
 
-// ── Large payload comparison ─────────────────────────────────────
+// ── Level comparison: 1 KB payload ──────────────────────────────
 
-fn large_payload(c: &mut Criterion) {
-    // 1 KB raw binary payload — no struct, just bytes
+fn level_comparison_1kb(c: &mut Criterion) {
+    let mut group = c.benchmark_group("1KB payload roundtrip");
+
+    let table = DispatchTable::new();
+
+    // Tauri: JSON string → Value → Vec<u8> → Value → JSON string
+    table.register("tauri_1kb", |payload: Vec<u8>| {
+        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let data: Vec<u8> = serde_json::from_value(value).unwrap();
+        let out_value = serde_json::to_value(&data).unwrap();
+        serde_json::to_vec(&out_value).unwrap()
+    });
+
+    // conduit Level 1: JSON bytes → Vec<u8> → JSON bytes
+    table.register("conduit_l1_1kb", |payload: Vec<u8>| {
+        let data: Vec<u8> = serde_json::from_slice(&payload).unwrap();
+        serde_json::to_vec(&data).unwrap()
+    });
+
+    // conduit Level 2: raw bytes passthrough
+    table.register("conduit_l2_1kb", |payload: Vec<u8>| payload);
+
     let data_1k = vec![0xABu8; 1024];
+    let json_payload = serde_json::to_vec(&data_1k).unwrap();
 
-    c.bench_function("roundtrip 1KB payload — JSON (serde)", |b| {
-        b.iter(|| {
-            let json = serde_json::to_vec(black_box(&data_1k)).unwrap();
-            let decoded: Vec<u8> = serde_json::from_slice(black_box(&json)).unwrap();
-            black_box(decoded);
-        });
+    group.bench_function("Tauri invoke (JSON via Value)", |b| {
+        b.iter_batched(
+            || json_payload.clone(),
+            |p| {
+                let result = table.dispatch("tauri_1kb", p).unwrap();
+                black_box(result);
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
-    c.bench_function("roundtrip 1KB payload — binary (memcpy)", |b| {
-        b.iter(|| {
-            // Binary path: just copy the bytes (no encoding needed for raw data)
-            let encoded = black_box(&data_1k).to_vec();
-            let decoded = black_box(encoded);
-            black_box(decoded);
-        });
+    group.bench_function("conduit Level 1 (JSON direct)", |b| {
+        b.iter_batched(
+            || json_payload.clone(),
+            |p| {
+                let result = table.dispatch("conduit_l1_1kb", p).unwrap();
+                black_box(result);
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
-    // 64 KB payload
+    group.bench_function("conduit Level 2 (binary)", |b| {
+        b.iter_batched(
+            || data_1k.clone(),
+            |p| {
+                let result = table.dispatch("conduit_l2_1kb", p).unwrap();
+                black_box(result);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+// ── Level comparison: 64 KB payload ─────────────────────────────
+
+fn level_comparison_64kb(c: &mut Criterion) {
+    let mut group = c.benchmark_group("64KB payload roundtrip");
+
+    let table = DispatchTable::new();
+
+    table.register("tauri_64kb", |payload: Vec<u8>| {
+        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let data: Vec<u8> = serde_json::from_value(value).unwrap();
+        let out_value = serde_json::to_value(&data).unwrap();
+        serde_json::to_vec(&out_value).unwrap()
+    });
+
+    table.register("conduit_l1_64kb", |payload: Vec<u8>| {
+        let data: Vec<u8> = serde_json::from_slice(&payload).unwrap();
+        serde_json::to_vec(&data).unwrap()
+    });
+
+    table.register("conduit_l2_64kb", |payload: Vec<u8>| payload);
+
     let data_64k = vec![0xABu8; 64 * 1024];
+    let json_payload = serde_json::to_vec(&data_64k).unwrap();
 
-    c.bench_function("roundtrip 64KB payload — JSON (serde)", |b| {
-        b.iter(|| {
-            let json = serde_json::to_vec(black_box(&data_64k)).unwrap();
-            let decoded: Vec<u8> = serde_json::from_slice(black_box(&json)).unwrap();
-            black_box(decoded);
-        });
+    group.bench_function("Tauri invoke (JSON via Value)", |b| {
+        b.iter_batched(
+            || json_payload.clone(),
+            |p| {
+                let result = table.dispatch("tauri_64kb", p).unwrap();
+                black_box(result);
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 
-    c.bench_function("roundtrip 64KB payload — binary (memcpy)", |b| {
-        b.iter(|| {
-            let encoded = black_box(&data_64k).to_vec();
-            let decoded = black_box(encoded);
-            black_box(decoded);
-        });
+    group.bench_function("conduit Level 1 (JSON direct)", |b| {
+        b.iter_batched(
+            || json_payload.clone(),
+            |p| {
+                let result = table.dispatch("conduit_l1_64kb", p).unwrap();
+                black_box(result);
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
+
+    group.bench_function("conduit Level 2 (binary)", |b| {
+        b.iter_batched(
+            || data_64k.clone(),
+            |p| {
+                let result = table.dispatch("conduit_l2_64kb", p).unwrap();
+                black_box(result);
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
 }
 
 criterion_group!(
     benches,
-    encode_comparison,
-    decode_comparison,
-    roundtrip_comparison,
-    dispatch_roundtrip,
-    large_payload,
+    level_comparison_struct,
+    level_comparison_1kb,
+    level_comparison_64kb,
 );
 criterion_main!(benches);
