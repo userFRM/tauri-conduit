@@ -393,7 +393,7 @@ fn conduit_error_variants() {
     assert!(e2.to_string().contains("test_cmd"));
 
     let e3 = Error::DecodeFailed;
-    assert_eq!(e3.to_string(), "frame decode failed");
+    assert_eq!(e3.to_string(), "binary decode failed");
 }
 
 #[test]

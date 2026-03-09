@@ -8,10 +8,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+use crate::codec::{Decode, Encode};
 use crate::error::Error;
 
-/// Boxed synchronous handler: takes payload bytes, returns response bytes.
-type BoxedHandler = Box<dyn Fn(Vec<u8>) -> Vec<u8> + Send + Sync>;
+/// Boxed synchronous handler: takes payload bytes, returns response bytes
+/// or an [`Error`].
+type BoxedHandler = Box<dyn Fn(Vec<u8>) -> Result<Vec<u8>, Error> + Send + Sync>;
 
 /// Named command registry with synchronous dispatch.
 pub struct Router {
@@ -33,7 +38,7 @@ impl Router {
     where
         F: Fn(Vec<u8>) -> Vec<u8> + Send + Sync + 'static,
     {
-        let boxed: BoxedHandler = Box::new(handler);
+        let boxed: BoxedHandler = Box::new(move |payload| Ok(handler(payload)));
         self.handlers
             .write()
             .unwrap_or_else(|e| e.into_inner())
@@ -47,7 +52,55 @@ impl Router {
     where
         F: Fn() -> Vec<u8> + Send + Sync + 'static,
     {
-        let boxed: BoxedHandler = Box::new(move |_payload| handler());
+        let boxed: BoxedHandler = Box::new(move |_payload| Ok(handler()));
+        self.handlers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name.into(), Arc::new(boxed));
+    }
+
+    /// Register a JSON handler for a command name.
+    ///
+    /// The incoming payload is deserialised from JSON into `A`, the handler
+    /// is called with the typed value, and the return value `R` is serialised
+    /// back to JSON bytes. Returns [`Error::Serialize`] on deserialisation
+    /// failure.
+    pub fn register_json<F, A, R>(&self, name: impl Into<String>, handler: F)
+    where
+        F: Fn(A) -> R + Send + Sync + 'static,
+        A: DeserializeOwned + 'static,
+        R: Serialize + 'static,
+    {
+        let boxed: BoxedHandler = Box::new(move |payload| {
+            let arg: A = serde_json::from_slice(&payload).map_err(Error::Serialize)?;
+            let result = handler(arg);
+            serde_json::to_vec(&result).map_err(Error::Serialize)
+        });
+        self.handlers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name.into(), Arc::new(boxed));
+    }
+
+    /// Register a binary handler for a command name.
+    ///
+    /// The incoming payload is decoded via the [`Decode`] trait into `A`,
+    /// the handler is called with the typed value, and the return value `R`
+    /// is encoded via [`Encode`] back to bytes. Returns
+    /// [`Error::DecodeFailed`] if the payload cannot be decoded.
+    pub fn register_binary<F, A, R>(&self, name: impl Into<String>, handler: F)
+    where
+        F: Fn(A) -> R + Send + Sync + 'static,
+        A: Decode + 'static,
+        R: Encode + 'static,
+    {
+        let boxed: BoxedHandler = Box::new(move |payload| {
+            let (arg, _consumed) = A::decode(&payload).ok_or(Error::DecodeFailed)?;
+            let result = handler(arg);
+            let mut buf = Vec::with_capacity(result.encode_size());
+            result.encode(&mut buf);
+            Ok(buf)
+        });
         self.handlers
             .write()
             .unwrap_or_else(|e| e.into_inner())
@@ -64,7 +117,7 @@ impl Router {
             handlers.get(name).cloned()
         };
         match handler {
-            Some(h) => Ok(h(payload)),
+            Some(h) => h(payload),
             None => Err(Error::UnknownCommand(name.to_string())),
         }
     }
@@ -161,5 +214,69 @@ mod tests {
         let table = Router::new();
         let resp = table.call_or_error_bytes("nope", vec![]);
         assert_eq!(resp, b"unknown command: nope");
+    }
+
+    // -- JSON handler tests --------------------------------------------------
+
+    #[test]
+    fn register_json_roundtrip() {
+        let table = Router::new();
+        table.register_json("add", |args: (i32, i32)| args.0 + args.1);
+        let payload = serde_json::to_vec(&(3, 4)).unwrap();
+        let resp = table.call("add", payload).unwrap();
+        let result: i32 = serde_json::from_slice(&resp).unwrap();
+        assert_eq!(result, 7);
+    }
+
+    #[test]
+    fn register_json_bad_input() {
+        let table = Router::new();
+        table.register_json("add", |args: (i32, i32)| args.0 + args.1);
+        let err = table.call("add", b"not json!".to_vec()).unwrap_err();
+        assert!(matches!(err, Error::Serialize(_)));
+    }
+
+    // -- Binary handler tests ------------------------------------------------
+
+    /// Minimal newtype that implements Encode/Decode for testing.
+    #[derive(Debug, PartialEq)]
+    struct Pair(u32, u32);
+
+    impl crate::codec::Encode for Pair {
+        fn encode(&self, buf: &mut Vec<u8>) {
+            self.0.encode(buf);
+            self.1.encode(buf);
+        }
+        fn encode_size(&self) -> usize {
+            8
+        }
+    }
+
+    impl crate::codec::Decode for Pair {
+        fn decode(data: &[u8]) -> Option<(Self, usize)> {
+            let (a, ca) = u32::decode(data)?;
+            let (b, cb) = u32::decode(&data[ca..])?;
+            Some((Pair(a, b), ca + cb))
+        }
+    }
+
+    #[test]
+    fn register_binary_roundtrip() {
+        let table = Router::new();
+        table.register_binary("sum", |p: Pair| p.0 + p.1);
+        let mut payload = Vec::new();
+        Pair(10, 20).encode(&mut payload);
+        let resp = table.call("sum", payload).unwrap();
+        let (result, _) = u32::decode(&resp).unwrap();
+        assert_eq!(result, 30);
+    }
+
+    #[test]
+    fn register_binary_bad_input() {
+        let table = Router::new();
+        table.register_binary("sum", |p: Pair| p.0 + p.1);
+        // Only 3 bytes — too short for two u32 values.
+        let err = table.call("sum", vec![1, 2, 3]).unwrap_err();
+        assert!(matches!(err, Error::DecodeFailed));
     }
 }

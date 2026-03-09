@@ -18,6 +18,9 @@ pub enum Error {
     DecodeFailed,
     /// A payload exceeds the maximum encodable size (u32::MAX bytes).
     PayloadTooLarge(usize),
+    /// A reliable channel's byte budget has been reached and the frame was
+    /// rejected (no data was lost).
+    ChannelFull,
 }
 
 impl fmt::Display for Error {
@@ -26,10 +29,11 @@ impl fmt::Display for Error {
             Self::AuthFailed => f.write_str("authentication failed"),
             Self::Serialize(e) => write!(f, "serialization error: {e}"),
             Self::UnknownCommand(name) => write!(f, "unknown command: {name}"),
-            Self::DecodeFailed => f.write_str("frame decode failed"),
+            Self::DecodeFailed => f.write_str("binary decode failed"),
             Self::PayloadTooLarge(len) => {
                 write!(f, "payload too large: {len} bytes exceeds u32::MAX")
             }
+            Self::ChannelFull => f.write_str("channel full: byte limit reached"),
         }
     }
 }
@@ -86,5 +90,22 @@ mod tests {
             err.to_string(),
             "payload too large: 5000000000 bytes exceeds u32::MAX"
         );
+    }
+
+    #[test]
+    fn display_decode_failed() {
+        let err = Error::DecodeFailed;
+        assert_eq!(err.to_string(), "binary decode failed");
+    }
+
+    #[test]
+    fn display_channel_full() {
+        let err = Error::ChannelFull;
+        assert_eq!(err.to_string(), "channel full: byte limit reached");
+    }
+
+    #[test]
+    fn error_source_channel_full() {
+        assert!(std::error::Error::source(&Error::ChannelFull).is_none());
     }
 }

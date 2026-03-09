@@ -15,8 +15,9 @@
 //!     .plugin(
 //!         tauri_plugin_conduit::init()
 //!             .command("ping", |_| b"pong".to_vec())
-//!             .command("get_ticks", handle_ticks)
-//!             .channel("telemetry")           // ring buffer for streaming
+//!             .command_json("greet", |name: String| format!("Hello, {name}!"))
+//!             .channel("telemetry")
+//!             .channel_ordered("events")
 //!             .build()
 //!     )
 //!     .run(tauri::generate_context!())
@@ -26,7 +27,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use conduit_core::{RingBuffer, Router};
+use conduit_core::{ChannelBuffer, Decode, Encode, Queue, RingBuffer, Router};
 use subtle::ConstantTimeEq;
 use tauri::plugin::{Builder as TauriPluginBuilder, TauriPlugin};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -61,7 +62,7 @@ pub struct BootstrapInfo {
     pub protocol_base: String,
     /// Per-launch invoke key for custom protocol authentication (hex-encoded).
     pub invoke_key: String,
-    /// Available ring buffer channel names.
+    /// Available channel names.
     pub channels: Vec<String>,
 }
 
@@ -81,12 +82,12 @@ impl std::fmt::Debug for BootstrapInfo {
 
 /// Shared state for the conduit Tauri plugin.
 ///
-/// Holds the dispatch table, named ring buffer channels, the per-launch
-/// invoke key, and the app handle for emitting push notifications.
+/// Holds the router, named streaming channels, the per-launch invoke key,
+/// and the app handle for emitting push notifications.
 pub struct PluginState<R: Runtime> {
     dispatch: Arc<Router>,
-    /// Named ring buffer channels for server→client streaming.
-    channels: HashMap<String, Arc<RingBuffer>>,
+    /// Named channels for server→client streaming (lossy or ordered).
+    channels: HashMap<String, Arc<ChannelBuffer>>,
     /// Tauri app handle for emitting events to the frontend.
     app_handle: AppHandle<R>,
     /// Per-launch invoke key (hex-encoded, 64 hex chars = 32 bytes).
@@ -105,22 +106,26 @@ impl<R: Runtime> std::fmt::Debug for PluginState<R> {
 }
 
 impl<R: Runtime> PluginState<R> {
-    /// Get a ring buffer channel by name (for pushing data from Rust handlers).
-    pub fn channel(&self, name: &str) -> Option<&Arc<RingBuffer>> {
+    /// Get a channel by name (for pushing data from Rust handlers).
+    pub fn channel(&self, name: &str) -> Option<&Arc<ChannelBuffer>> {
         self.channels.get(name)
     }
 
-    /// Push binary data to a named ring buffer channel and notify JS listeners.
+    /// Push binary data to a named channel and notify JS listeners.
     ///
-    /// After writing to the ring buffer, emits a `conduit:data-available` event
+    /// After writing to the channel, emits a `conduit:data-available` event
     /// with the channel name as payload. JS subscribers receive this event and
     /// auto-drain the binary data via the custom protocol endpoint.
+    ///
+    /// For lossy channels, oldest frames are silently dropped when the buffer
+    /// is full. For ordered channels, returns an error if the buffer is full
+    /// (backpressure).
     pub fn push(&self, channel: &str, data: &[u8]) -> Result<(), String> {
-        let rb = self
+        let ch = self
             .channels
             .get(channel)
             .ok_or_else(|| format!("unknown channel: {channel}"))?;
-        let _ = rb.push(data);
+        ch.push(data).map_err(|e| e.to_string())?;
         let _ = self.app_handle.emit("conduit:data-available", channel);
         Ok(())
     }
@@ -183,6 +188,18 @@ fn conduit_subscribe(
 }
 
 // ---------------------------------------------------------------------------
+// Channel kind (internal)
+// ---------------------------------------------------------------------------
+
+/// Internal enum for deferred channel construction.
+enum ChannelKind {
+    /// Lossy ring buffer with the given byte capacity.
+    Lossy(usize),
+    /// Ordered queue with the given max byte limit.
+    Ordered(usize),
+}
+
+// ---------------------------------------------------------------------------
 // Plugin builder
 // ---------------------------------------------------------------------------
 
@@ -196,20 +213,20 @@ type CommandRegistration = Box<dyn FnOnce(&Router) + Send>;
 pub struct PluginBuilder {
     /// Deferred command registrations: (name, handler factory).
     commands: Vec<CommandRegistration>,
-    /// Named ring buffer channels: (name, capacity in bytes).
-    channel_defs: Vec<(String, usize)>,
+    /// Named channels: (name, kind).
+    channel_defs: Vec<(String, ChannelKind)>,
 }
 
 impl std::fmt::Debug for PluginBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginBuilder")
             .field("commands", &self.commands.len())
-            .field("channel_defs", &self.channel_defs)
+            .field("channel_defs_count", &self.channel_defs.len())
             .finish()
     }
 }
 
-/// Default ring buffer capacity (64 KB).
+/// Default channel capacity (64 KB).
 const DEFAULT_CHANNEL_CAPACITY: usize = 64 * 1024;
 
 impl PluginBuilder {
@@ -221,10 +238,11 @@ impl PluginBuilder {
         }
     }
 
-    /// Register a synchronous command handler.
+    // -- Raw handlers -------------------------------------------------------
+
+    /// Register a raw command handler (`Vec<u8>` in, `Vec<u8>` out).
     ///
-    /// The handler receives the raw request payload and must return the raw
-    /// response payload. Command names correspond to the path segment in the
+    /// Command names correspond to the path segment in the
     /// `conduit://localhost/invoke/<cmd_name>` URL.
     pub fn command<F>(mut self, name: impl Into<String>, handler: F) -> Self
     where
@@ -237,21 +255,104 @@ impl PluginBuilder {
         self
     }
 
-    /// Register a named ring buffer channel with the default capacity (64 KB).
+    // -- JSON handlers (Level 1) --------------------------------------------
+
+    /// Register a typed JSON command handler.
     ///
-    /// The JS client can subscribe to push notifications for this channel,
-    /// or poll it directly via `conduit://localhost/drain/<name>`.
-    pub fn channel(mut self, name: impl Into<String>) -> Self {
-        self.channel_defs
-            .push((name.into(), DEFAULT_CHANNEL_CAPACITY));
+    /// The request payload is deserialized from JSON via `serde_json`, and the
+    /// response is serialized back to JSON. This is the ergonomic equivalent of
+    /// Tauri's `#[tauri::command]` for conduit.
+    ///
+    /// ```rust,ignore
+    /// .command_json("greet", |name: String| format!("Hello, {name}!"))
+    /// ```
+    pub fn command_json<F, A, R>(mut self, name: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(A) -> R + Send + Sync + 'static,
+        A: serde::de::DeserializeOwned + 'static,
+        R: serde::Serialize + 'static,
+    {
+        let name = name.into();
+        self.commands.push(Box::new(move |table: &Router| {
+            table.register_json(name, handler);
+        }));
         self
     }
 
-    /// Register a named ring buffer channel with a custom byte capacity.
-    pub fn channel_with_capacity(mut self, name: impl Into<String>, capacity: usize) -> Self {
-        self.channel_defs.push((name.into(), capacity));
+    // -- Binary handlers (Level 2) ------------------------------------------
+
+    /// Register a typed binary command handler.
+    ///
+    /// The request payload is decoded via the [`Decode`] trait and the response
+    /// is encoded via [`Encode`]. No JSON involved — raw bytes in, raw bytes
+    /// out.
+    ///
+    /// ```rust,ignore
+    /// .command_binary("process", |tick: MarketTick| tick)
+    /// ```
+    pub fn command_binary<F, A, Ret>(mut self, name: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(A) -> Ret + Send + Sync + 'static,
+        A: Decode + 'static,
+        Ret: Encode + 'static,
+    {
+        let name = name.into();
+        self.commands.push(Box::new(move |table: &Router| {
+            table.register_binary(name, handler);
+        }));
         self
     }
+
+    // -- Lossy channels (default) -------------------------------------------
+
+    /// Register a lossy channel with the default capacity (64 KB).
+    ///
+    /// Oldest frames are silently dropped when the buffer is full. Best for
+    /// telemetry, game state, and real-time data where freshness matters more
+    /// than completeness.
+    pub fn channel(mut self, name: impl Into<String>) -> Self {
+        self.channel_defs
+            .push((name.into(), ChannelKind::Lossy(DEFAULT_CHANNEL_CAPACITY)));
+        self
+    }
+
+    /// Register a lossy channel with a custom byte capacity.
+    pub fn channel_with_capacity(mut self, name: impl Into<String>, capacity: usize) -> Self {
+        self.channel_defs
+            .push((name.into(), ChannelKind::Lossy(capacity)));
+        self
+    }
+
+    // -- Ordered channels (guaranteed delivery) -----------------------------
+
+    /// Register an ordered channel with the default capacity (64 KB).
+    ///
+    /// No frames are ever dropped. When the buffer is full,
+    /// [`PluginState::push`] returns an error (backpressure). Best for
+    /// transaction logs, control messages, and any data that must arrive
+    /// intact and in order.
+    pub fn channel_ordered(mut self, name: impl Into<String>) -> Self {
+        self.channel_defs.push((
+            name.into(),
+            ChannelKind::Ordered(DEFAULT_CHANNEL_CAPACITY),
+        ));
+        self
+    }
+
+    /// Register an ordered channel with a custom byte limit.
+    ///
+    /// A `max_bytes` of `0` means unbounded — the buffer grows without limit.
+    pub fn channel_ordered_with_capacity(
+        mut self,
+        name: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
+        self.channel_defs
+            .push((name.into(), ChannelKind::Ordered(max_bytes)));
+        self
+    }
+
+    // -- Build --------------------------------------------------------------
 
     /// Build the Tauri v2 plugin.
     ///
@@ -325,10 +426,10 @@ impl PluginBuilder {
                         }
                     }
                     "drain" => {
-                        // Drain all frames from the named ring buffer channel.
+                        // Drain all frames from the named channel.
                         match state.channel(target) {
-                            Some(rb) => {
-                                let blob = rb.drain_all();
+                            Some(ch) => {
+                                let blob = ch.drain_all();
                                 make_response(200, "application/octet-stream", blob)
                             }
                             None => make_response(404, "text/plain", format!("unknown channel: {target}").into_bytes()),
@@ -351,10 +452,18 @@ impl PluginBuilder {
                     register_fn(&dispatch);
                 }
 
-                // Create named ring buffer channels.
+                // Create named channels.
                 let mut channels = HashMap::new();
-                for (name, capacity) in channel_defs {
-                    channels.insert(name, Arc::new(RingBuffer::new(capacity)));
+                for (name, kind) in channel_defs {
+                    let buf = match kind {
+                        ChannelKind::Lossy(cap) => {
+                            ChannelBuffer::Lossy(RingBuffer::new(cap))
+                        }
+                        ChannelKind::Ordered(max_bytes) => {
+                            ChannelBuffer::Reliable(Queue::new(max_bytes))
+                        }
+                    };
+                    channels.insert(name, Arc::new(buf));
                 }
 
                 // Generate the per-launch invoke key.
@@ -399,7 +508,9 @@ impl Default for PluginBuilder {
 ///     .plugin(
 ///         tauri_plugin_conduit::init()
 ///             .command("ping", |_| b"pong".to_vec())
+///             .command_json("greet", |name: String| format!("Hello, {name}!"))
 ///             .channel("telemetry")
+///             .channel_ordered("events")
 ///             .build()
 ///     )
 ///     .run(tauri::generate_context!())
