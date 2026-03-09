@@ -4,75 +4,45 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
-Binary IPC for Tauri v2 -- bypasses the webview JSON bridge with an in-process custom protocol.
+**A faster drop-in replacement for Tauri's `invoke()`.**
+
+Swap one import and your Tauri v2 app communicates through an in-process custom protocol instead of the default webview bridge. Same API, same behavior -- faster transport.
+
+```diff
+- import { invoke } from '@tauri-apps/api/core';
++ import { invoke } from '@tauri-conduit/client';
+```
+
+For hot paths where every microsecond matters, switch to `invokeBinary()` to skip JSON entirely and get up to **780x faster** serialization.
 
 ---
 
-## Why
+## "Does a Tauri app really need this?"
 
-Tauri's built-in `invoke()` serializes every call as JSON, round-trips it through the webview bridge, and deserializes on the other side. For most apps this is fine. For high-frequency binary data -- financial ticks, audio buffers, sensor telemetry, game state -- the serialization overhead becomes the bottleneck.
+If your app sends a button click and gets a string back, probably not -- Tauri's built-in IPC is fine for that.
 
-conduit replaces that path with a `conduit://` custom protocol handler that runs in-process, in the same address space as the Rust backend. No network surface, no JSON, no webview bridge.
+But Tauri is increasingly used for apps where performance actually matters: trading terminals streaming real-time market data, audio/video tools processing buffers every frame, IoT dashboards ingesting sensor telemetry, game overlays syncing state at 60+ fps. In these cases, the IPC layer between your frontend and backend becomes the bottleneck -- not Rust, not your logic, just the bridge.
 
-### What conduit eliminates
+conduit exists so you don't have to choose between Tauri's developer experience and the performance your use case demands.
 
-| | Tauri `invoke()` | conduit `invoke()` |
-|---|---|---|
-| **JS → Rust** | `JSON.stringify()` → webview bridge | `fetch("conduit://...")` → in-process handler |
-| **Rust → JS** | serde_json → webview bridge | raw bytes → `ArrayBuffer` |
-| **Serialization** | JSON (text, allocations, parsing) | Fixed-layout binary (LE primitives, zero-parse) |
-| **Transport** | Webview message bridge | Custom protocol (same address space) |
-| **Streaming** | Poll or manual event wiring | Event-driven push + binary drain |
+## Two levels of optimization
 
-### Codec comparison (JSON vs binary)
+conduit gives you a progressive optimization path -- start easy, go deeper where it matters.
 
-Run `cd crates/conduit-core && cargo bench -- comparison` to see on your hardware. Representative numbers:
+### Level 1: Drop-in replacement (faster transport)
 
-| Operation | JSON (serde) | Binary (conduit) | Speedup |
-|---|---|---|---|
-| Encode 25B struct | 105 ns | 5.8 ns | **18x** |
-| Decode 25B struct | 122 ns | 11 ns | **11x** |
-| Roundtrip 25B struct | 260 ns | 20 ns | **13x** |
-| Dispatch echo (encode→handler→decode) | 309 ns | 75 ns | **4x** |
-| Roundtrip 1 KB raw payload | 14.5 us | 19 ns | **760x** |
-| Roundtrip 64 KB raw payload | 856 us | 1.1 us | **780x** |
-
-These measure the serialization layer that conduit replaces. The full IPC round-trip also includes the Tauri custom protocol handler, which varies by platform and webview engine but adds constant overhead to both paths.
-
-## Quick Start (Rust)
-
-```rust
-// src-tauri/src/main.rs
-tauri::Builder::default()
-    .plugin(
-        conduit_tauri::init()
-            .command("ping", |_| b"pong".to_vec())
-            .command("get_ticks", handle_ticks)
-            .channel("telemetry")   // ring buffer for streaming
-            .build()
-    )
-    .run(tauri::generate_context!())
-    .unwrap();
-```
-
-Push data to the frontend from any Rust thread:
-
-```rust
-let state: tauri::State<'_, ConduitState<R>> = app.state();
-state.push("telemetry", &tick_bytes)?;  // writes to ring buffer + emits event
-```
-
-## Quick Start (TypeScript)
-
-Drop-in replacement for `@tauri-apps/api/core`:
+`invoke()` is API-compatible with Tauri's built-in invoke. It still uses JSON for argument encoding, but routes through conduit's in-process custom protocol instead of the webview bridge. Less overhead on the transport side, zero code changes.
 
 ```typescript
 import { invoke } from '@tauri-conduit/client';
 
+// Same API you already know from Tauri
 const result = await invoke('get_ticks', { symbol: 'AAPL' });
 ```
 
-Full control with binary payloads:
+### Level 2: Binary mode (eliminates JSON entirely)
+
+`invokeBinary()` sends and receives raw bytes. Pair it with the binary codec on the Rust side and JSON is completely out of the picture. This is where the big performance wins are.
 
 ```typescript
 import { connect } from '@tauri-conduit/client';
@@ -81,119 +51,135 @@ const conduit = await connect();
 const buf = await conduit.invokeBinary('raw_data', new Uint8Array([1, 2, 3]));
 ```
 
-## Streaming
+### Performance comparison
 
-conduit supports both push (event-driven) and pull (polling) access to streaming data. Use whichever model fits your app:
+These numbers measure the serialization layer -- the part conduit's binary mode eliminates:
 
-### Push (no polling)
+| Payload | JSON (serde) | Binary (conduit) | Speedup |
+|---|---|---|---|
+| Small struct (25 bytes) | 260 ns | 20 ns | **13x** |
+| Medium payload (1 KB) | 14.5 us | 19 ns | **760x** |
+| Large payload (64 KB) | 856 us | 1.1 us | **780x** |
 
-```typescript
-import { subscribe } from '@tauri-conduit/client';
+> Run `cd crates/conduit-core && cargo bench -- comparison` to see numbers on your hardware. The larger the payload, the bigger the gap.
 
-const unsub = await subscribe('telemetry', (buf) => {
-  // Called automatically when Rust pushes data.
-  // Parse buf: [u32 LE frame_count] [u32 LE len][bytes] per frame
-});
+## Getting Started
+
+### 1. Install
+
+```sh
+# Rust (in your src-tauri directory)
+cargo add conduit-tauri
+
+# TypeScript
+npm install @tauri-conduit/client
 ```
 
-### Pull (user-controlled)
+### 2. Register your commands (Rust)
+
+```rust
+// src-tauri/src/main.rs
+tauri::Builder::default()
+    .plugin(
+        conduit_tauri::init()
+            .command("ping", |_| b"pong".to_vec())
+            .command("get_ticks", handle_ticks)
+            .build()
+    )
+    .run(tauri::generate_context!())
+    .unwrap();
+```
+
+Commands receive raw bytes (`Vec<u8>`) and return raw bytes. For JSON-style usage, deserialize the payload in your handler. For binary mode, use the wire codec directly.
+
+### 3. Call from the frontend
 
 ```typescript
-import { drain } from '@tauri-conduit/client';
+import { invoke } from '@tauri-conduit/client';
 
-// Call whenever you want the latest data
+const result = await invoke('get_ticks', { symbol: 'AAPL' });
+```
+
+## Streaming
+
+conduit includes built-in streaming from Rust to JavaScript with no polling required.
+
+**Rust side** -- register a channel and push data to it:
+
+```rust
+conduit_tauri::init()
+    .channel("telemetry")               // register a streaming channel
+    .build()
+
+// Later, from any thread:
+let state: tauri::State<'_, ConduitState<R>> = app.state();
+state.push("telemetry", &bytes)?;       // auto-notifies the frontend
+```
+
+**JS side** -- subscribe for automatic delivery, or pull manually:
+
+```typescript
+// Option A: automatic (no polling, event-driven)
+const unsub = await subscribe('telemetry', (buf) => {
+  // Called each time Rust pushes data
+});
+
+// Option B: manual (pull whenever you want)
 const buf = await drain('telemetry');
 ```
 
-### How it works
+Under the hood, Rust writes frames into a ring buffer and emits a lightweight event. The JS client listens for the event and fetches the data through the custom protocol. If the consumer falls behind, the oldest frames are dropped -- latest data always wins, and the producer never blocks.
 
-1. **Rust side** -- `state.push("channel_name", &bytes)` writes a binary frame into the ring buffer and emits a `conduit:data-available` Tauri event.
-2. **JS side** -- `subscribe()` listens for the event and auto-drains via `conduit://`. Or call `drain()` manually whenever you want.
+## How it works
 
-The ring buffer applies lossy back-pressure -- if the consumer falls behind, the oldest frames are dropped. This is intentional for real-time data where the latest value is always more relevant than blocking the producer.
+conduit registers a `conduit://` custom protocol with Tauri. When your frontend calls `invoke()`, it uses `fetch("conduit://...")` instead of going through the webview message bridge. The request stays in the same process -- no network, no IPC pipes.
 
-## Binary Codec
+| | Tauri `invoke()` | conduit `invoke()` | conduit `invokeBinary()` |
+|---|---|---|---|
+| **Transport** | Webview bridge | Custom protocol (in-process) | Custom protocol (in-process) |
+| **Serialization** | JSON both sides | JSON both sides | None (raw bytes) |
+| **Streaming** | Manual event wiring | Built-in push + drain | Built-in push + drain |
+| **Network surface** | None | None | None |
 
-Derive macros for binary serialization with no parsing overhead:
+## Typed binary codec (optional)
+
+For binary mode, conduit provides derive macros to define compact wire formats. This is entirely optional -- `invoke()` works without it.
 
 ```rust
 use conduit_derive::{WireEncode, WireDecode};
 
 #[derive(WireEncode, WireDecode)]
 struct MarketTick {
-    timestamp: i64,    // 8 bytes, LE
-    price: f64,        // 8 bytes, LE
-    volume: f64,       // 8 bytes, LE
-    side: u8,          // 1 byte
+    timestamp: i64,
+    price: f64,
+    volume: f64,
+    side: u8,
 }
-// Total: 25 bytes on the wire. No JSON, no parsing, no allocation.
+// 25 bytes on the wire. No schema, no parsing.
 ```
 
 Supported types: `u8`-`u64`, `i8`-`i64`, `f32`, `f64`, `bool`, `Vec<u8>`, `String`.
 
-## Architecture
-
-| Layer | Crate | Purpose |
-|---|---|---|
-| Core | `conduit-core` | Codec, dispatch table, ring buffer |
-| Derive | `conduit-derive` | `#[derive(WireEncode, WireDecode)]` |
-| Plugin | `conduit-tauri` | Tauri v2 plugin with `conduit://` protocol |
-| Client | `@tauri-conduit/client` | TypeScript `invoke()` / `subscribe()` / `drain()` |
-
-Everything runs in-process. The `conduit://` URI scheme is handled by Tauri's custom protocol mechanism -- the webview engine intercepts the `fetch()` call and routes it to a Rust closure in the same process. No TCP, no IPC pipes, no shared memory files.
-
 ## Security
 
-- **No network surface** -- everything runs in the same address space. No ports, no sockets, no endpoints.
-- **Per-launch invoke key** -- a 32-byte random key generated at startup, validated on every custom protocol request using constant-time comparison (`subtle` crate). Sent via `X-Conduit-Key` header, never in URLs.
-- **Capability-based ACL** -- integrates with Tauri's permission system for command authorization.
-- **CSP compliance** -- the custom protocol handler does not require Content Security Policy exceptions.
-- **Panic isolation** -- handler panics are caught and returned as 500 errors, never crash the protocol handler.
+Everything runs in-process -- no ports, no sockets, no network endpoints.
 
-## Benchmarks
+- **Per-launch auth key** -- a random 32-byte key is generated each time your app starts. Every request is validated with constant-time comparison. Leaked keys expire when the app restarts.
+- **Tauri permissions** -- integrates with Tauri's built-in capability system for command authorization.
+- **CSP safe** -- no Content Security Policy exceptions required.
+- **Panic isolation** -- if a handler panics, conduit catches it and returns a clean error. The app keeps running.
 
-Four benchmark suites in `crates/conduit-core`:
-
-- **comparison** -- head-to-head JSON (serde) vs binary (conduit) at the codec + dispatch layer
-- **codec** -- frame header, frame wrap/unwrap, primitive and collection wire encoding
-- **ringbuf** -- push throughput, push+pop roundtrip, drain, multi-producer contention
-- **dispatch** -- single handler dispatch, lookup across 100 registered commands
-
-```sh
-cd crates/conduit-core && cargo bench
-```
-
-## Project Structure
+## Project layout
 
 ```
 tauri-conduit/
   crates/
-    conduit-core/           Core library (codec, dispatch, ring buffer)
-    conduit-derive/         Proc macros (WireEncode, WireDecode)
-    conduit-tauri/          Tauri v2 plugin
+    conduit-core/         Core library (codec, dispatch, ring buffer)
+    conduit-derive/       Derive macros (WireEncode, WireDecode)
+    conduit-tauri/        Tauri v2 plugin
   packages/
-    tauri-conduit/          TypeScript client (@tauri-conduit/client)
+    tauri-conduit/        TypeScript client (@tauri-conduit/client)
 ```
-
-## Installation
-
-```sh
-cargo add conduit-core                    # core library
-cargo add conduit-tauri                   # tauri v2 plugin
-npm install @tauri-conduit/client         # typescript client
-```
-
-Or as workspace dependencies:
-
-```toml
-[workspace.dependencies]
-conduit-core  = { path = "crates/conduit-core" }
-conduit-tauri = { path = "crates/conduit-tauri" }
-```
-
-## Relationship to tauri-wire
-
-`tauri-wire` is a standalone binary codec (9-byte frame header, transport-agnostic). `tauri-conduit` is the full stack: 11-byte frame header, custom protocol transport, ring buffer, derive macros, and a drop-in TypeScript client. Use `tauri-conduit` for new projects; use `tauri-wire` independently if you only need a lightweight binary codec.
 
 ## Contributing
 
@@ -201,14 +187,9 @@ Contributions welcome. Run the test suite before submitting:
 
 ```sh
 cargo test --workspace
-cargo clippy --workspace   # zero warnings
+cargo clippy --workspace
 ```
 
 ## License
 
-Licensed under either of
-
-- [MIT License](LICENSE-MIT)
-- [Apache License, Version 2.0](LICENSE-APACHE)
-
-at your option.
+Licensed under either of [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE) at your option.
