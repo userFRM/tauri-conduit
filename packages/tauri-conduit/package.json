@@ -1,0 +1,54 @@
+{
+  "name": "@tauri-conduit/client",
+  "version": "0.1.0",
+  "description": "High-performance binary IPC client for Tauri v2",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "test": "node --test src/__tests__/*.test.ts"
+  },
+  "keywords": [
+    "tauri",
+    "ipc",
+    "binary",
+    "conduit",
+    "protocol"
+  ],
+  "author": "tauri-conduit contributors",
+  "peerDependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@tauri-apps/api": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@types/node": "^25.3.5",
+    "typescript": "^5.7"
+  },
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/userFRM/tauri-conduit"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,22 @@
+[package]
+name = "conduit-tauri"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Tauri v2 plugin for conduit — binary IPC over the conduit:// custom protocol."
+keywords = ["tauri", "ipc", "plugin", "binary"]
+categories = ["gui", "web-programming"]
+repository = "https://github.com/userFRM/tauri-conduit"
+homepage = "https://github.com/userFRM/tauri-conduit"
+
+[dependencies]
+conduit-core = { version = "0.1.0", path = "../conduit-core" }
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin = { version = "2", features = ["build"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.3"
+subtle = "2"
+url = "2"
+http = "1"

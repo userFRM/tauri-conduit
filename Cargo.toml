@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/conduit-core",
+    "crates/conduit-derive",
+]
+exclude = [
+    "crates/conduit-tauri",  # requires system libs (webkit2gtk); built separately in CI
+]
+resolver = "2"
