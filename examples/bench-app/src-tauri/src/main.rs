@@ -73,6 +73,18 @@ fn conduit_echo_large(payload: LargePayload) -> LargePayload {
     payload
 }
 
+// ── Tauri command to print results to stdout ────────────────────
+
+#[tauri::command]
+fn print_results(output: String) {
+    println!("{output}");
+}
+
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 // ── App entry point ─────────────────────────────────────────────
 
 fn main() {
@@ -88,6 +100,8 @@ fn main() {
             tauri_echo_small,
             tauri_echo_medium,
             tauri_echo_large,
+            print_results,
+            exit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error running bench-app");
