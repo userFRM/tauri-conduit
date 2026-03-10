@@ -30,7 +30,10 @@ pub struct HandlerContext {
 impl HandlerContext {
     /// Create a new handler context.
     pub fn new(app_handle: Arc<dyn Any + Send + Sync>, webview_label: Option<String>) -> Self {
-        Self { app_handle, webview_label }
+        Self {
+            app_handle,
+            webview_label,
+        }
     }
 }
 
@@ -146,11 +149,7 @@ mod tests {
     fn handler_context_downcast() {
         struct CtxHandler;
         impl ConduitHandler for CtxHandler {
-            fn call(
-                &self,
-                _payload: Vec<u8>,
-                ctx: Arc<dyn Any + Send + Sync>,
-            ) -> HandlerResponse {
+            fn call(&self, _payload: Vec<u8>, ctx: Arc<dyn Any + Send + Sync>) -> HandlerResponse {
                 if ctx.downcast_ref::<String>().is_some() {
                     HandlerResponse::Sync(Ok(b"got string".to_vec()))
                 } else {

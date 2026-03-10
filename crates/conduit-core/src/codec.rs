@@ -106,8 +106,14 @@ impl FrameHeader {
             self.version,
             self.reserved,
             self.msg_type.to_u8(),
-            seq[0], seq[1], seq[2], seq[3],
-            plen[0], plen[1], plen[2], plen[3],
+            seq[0],
+            seq[1],
+            seq[2],
+            seq[3],
+            plen[0],
+            plen[1],
+            plen[2],
+            plen[3],
         ];
         buf.extend_from_slice(&header);
     }

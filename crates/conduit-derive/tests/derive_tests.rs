@@ -665,8 +665,7 @@ fn greet_optional(name: String, title: Option<u32>) -> String {
 
 #[test]
 fn command_option_param_present() {
-    let payload =
-        serde_json::to_vec(&serde_json::json!({ "name": "Alice", "title": 42 })).unwrap();
+    let payload = serde_json::to_vec(&serde_json::json!({ "name": "Alice", "title": 42 })).unwrap();
     let resp = call_sync(&handler!(greet_optional), payload).unwrap();
     let result: String = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, "Alice (title=42)");
@@ -718,10 +717,7 @@ fn original_sync_function_preserved() {
 #[test]
 fn original_sync_result_function_preserved() {
     assert!((divide_v2(10.0, 2.0).unwrap() - 5.0).abs() < f64::EPSILON);
-    assert_eq!(
-        divide_v2(10.0, 0.0).unwrap_err(),
-        "division by zero"
-    );
+    assert_eq!(divide_v2(10.0, 0.0).unwrap_err(), "division by zero");
 }
 
 #[tokio::test]

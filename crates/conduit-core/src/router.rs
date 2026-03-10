@@ -45,8 +45,7 @@ impl Router {
         F: Fn(Vec<u8>) -> Vec<u8> + Send + Sync + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |payload, _ctx| Ok(handler(payload)));
-        crate::write_or_recover(&self.handlers)
-            .insert(name.into(), Arc::new(boxed));
+        crate::write_or_recover(&self.handlers).insert(name.into(), Arc::new(boxed));
     }
 
     /// Register a handler that takes no payload.
@@ -57,8 +56,7 @@ impl Router {
         F: Fn() -> Vec<u8> + Send + Sync + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |_payload, _ctx| Ok(handler()));
-        crate::write_or_recover(&self.handlers)
-            .insert(name.into(), Arc::new(boxed));
+        crate::write_or_recover(&self.handlers).insert(name.into(), Arc::new(boxed));
     }
 
     /// Register a JSON handler for a command name.
@@ -78,8 +76,7 @@ impl Router {
             let result = handler(arg);
             sonic_rs::to_vec(&result).map_err(Error::from)
         });
-        crate::write_or_recover(&self.handlers)
-            .insert(name.into(), Arc::new(boxed));
+        crate::write_or_recover(&self.handlers).insert(name.into(), Arc::new(boxed));
     }
 
     /// Register a fallible JSON handler for a command name.
@@ -100,8 +97,7 @@ impl Router {
             let result = handler(arg).map_err(|e| Error::Handler(e.to_string()))?;
             sonic_rs::to_vec(&result).map_err(Error::from)
         });
-        crate::write_or_recover(&self.handlers)
-            .insert(name.into(), Arc::new(boxed));
+        crate::write_or_recover(&self.handlers).insert(name.into(), Arc::new(boxed));
     }
 
     /// Register a binary handler for a command name.
@@ -123,8 +119,7 @@ impl Router {
             result.encode(&mut buf);
             Ok(buf)
         });
-        crate::write_or_recover(&self.handlers)
-            .insert(name.into(), Arc::new(boxed));
+        crate::write_or_recover(&self.handlers).insert(name.into(), Arc::new(boxed));
     }
 
     /// Register a context-aware handler.
@@ -138,8 +133,7 @@ impl Router {
         F: Fn(Vec<u8>, &dyn std::any::Any) -> Result<Vec<u8>, Error> + Send + Sync + 'static,
     {
         let boxed: BoxedHandler = Box::new(handler);
-        crate::write_or_recover(&self.handlers)
-            .insert(name.into(), Arc::new(boxed));
+        crate::write_or_recover(&self.handlers).insert(name.into(), Arc::new(boxed));
     }
 
     /// Dispatch a command by name with an opaque context.
@@ -204,8 +198,7 @@ impl Router {
     /// Check whether a command is registered.
     #[must_use]
     pub fn has(&self, name: &str) -> bool {
-        crate::read_or_recover(&self.handlers)
-            .contains_key(name)
+        crate::read_or_recover(&self.handlers).contains_key(name)
     }
 }
 

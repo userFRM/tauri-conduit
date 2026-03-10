@@ -9,4 +9,3 @@ pub use conduit_derive::{command, handler};
 
 #[doc(hidden)]
 pub use conduit_core::serde;
-
