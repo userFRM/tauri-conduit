@@ -6,6 +6,8 @@ rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 description = "Facade crate for tauri-conduit — re-exports #[command], handler!(), and core types."
 repository = "https://github.com/userFRM/tauri-conduit"
+homepage = "https://github.com/userFRM/tauri-conduit"
+readme = "README.md"
 
 [dependencies]
 conduit-derive = { version = "2.0.0", path = "../conduit-derive" }
