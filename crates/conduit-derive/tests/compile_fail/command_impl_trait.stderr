@@ -1,0 +1,5 @@
+error: #[command] cannot be used with `impl Trait` parameters
+ --> tests/compile_fail/command_impl_trait.rs:4:28
+  |
+4 | fn impl_trait_handler(val: impl ToString) -> Vec<u8> {
+  |                            ^^^^^^^^^^^^^

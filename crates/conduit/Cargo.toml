@@ -1,12 +1,12 @@
 [package]
 name = "conduit"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Facade crate for tauri-conduit — re-exports #[command] and init()."
+description = "Facade crate for tauri-conduit — re-exports #[command], handler!(), and core types."
 repository = "https://github.com/userFRM/tauri-conduit"
 
 [dependencies]
-conduit-derive = { version = "1.0.0", path = "../conduit-derive" }
-conduit-core = { version = "1.0.0", path = "../conduit-core" }
+conduit-derive = { version = "2.0.0", path = "../conduit-derive" }
+conduit-core = { version = "2.0.0", path = "../conduit-core" }

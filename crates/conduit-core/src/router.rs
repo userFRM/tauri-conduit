@@ -45,9 +45,7 @@ impl Router {
         F: Fn(Vec<u8>) -> Vec<u8> + Send + Sync + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |payload, _ctx| Ok(handler(payload)));
-        self.handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::write_or_recover(&self.handlers)
             .insert(name.into(), Arc::new(boxed));
     }
 
@@ -59,9 +57,7 @@ impl Router {
         F: Fn() -> Vec<u8> + Send + Sync + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |_payload, _ctx| Ok(handler()));
-        self.handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::write_or_recover(&self.handlers)
             .insert(name.into(), Arc::new(boxed));
     }
 
@@ -78,13 +74,11 @@ impl Router {
         R: Serialize + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |payload, _ctx| {
-            let arg: A = sonic_rs::from_slice(&payload).map_err(Error::Serialize)?;
+            let arg: A = sonic_rs::from_slice(&payload).map_err(Error::from)?;
             let result = handler(arg);
-            sonic_rs::to_vec(&result).map_err(Error::Serialize)
+            sonic_rs::to_vec(&result).map_err(Error::from)
         });
-        self.handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::write_or_recover(&self.handlers)
             .insert(name.into(), Arc::new(boxed));
     }
 
@@ -102,13 +96,11 @@ impl Router {
         E: std::fmt::Display + 'static,
     {
         let boxed: BoxedHandler = Box::new(move |payload, _ctx| {
-            let arg: A = sonic_rs::from_slice(&payload).map_err(Error::Serialize)?;
+            let arg: A = sonic_rs::from_slice(&payload).map_err(Error::from)?;
             let result = handler(arg).map_err(|e| Error::Handler(e.to_string()))?;
-            sonic_rs::to_vec(&result).map_err(Error::Serialize)
+            sonic_rs::to_vec(&result).map_err(Error::from)
         });
-        self.handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::write_or_recover(&self.handlers)
             .insert(name.into(), Arc::new(boxed));
     }
 
@@ -131,9 +123,7 @@ impl Router {
             result.encode(&mut buf);
             Ok(buf)
         });
-        self.handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::write_or_recover(&self.handlers)
             .insert(name.into(), Arc::new(boxed));
     }
 
@@ -148,9 +138,7 @@ impl Router {
         F: Fn(Vec<u8>, &dyn std::any::Any) -> Result<Vec<u8>, Error> + Send + Sync + 'static,
     {
         let boxed: BoxedHandler = Box::new(handler);
-        self.handlers
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::write_or_recover(&self.handlers)
             .insert(name.into(), Arc::new(boxed));
     }
 
@@ -167,7 +155,7 @@ impl Router {
         ctx: &dyn std::any::Any,
     ) -> Result<Vec<u8>, Error> {
         let handler = {
-            let handlers = self.handlers.read().unwrap_or_else(|e| e.into_inner());
+            let handlers = crate::read_or_recover(&self.handlers);
             handlers.get(name).cloned()
         };
         match handler {
@@ -216,20 +204,14 @@ impl Router {
     /// Check whether a command is registered.
     #[must_use]
     pub fn has(&self, name: &str) -> bool {
-        self.handlers
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::read_or_recover(&self.handlers)
             .contains_key(name)
     }
 }
 
 impl std::fmt::Debug for Router {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self
-            .handlers
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .len();
+        let count = crate::read_or_recover(&self.handlers).len();
         f.debug_struct("Router")
             .field("handler_count", &count)
             .finish()
@@ -447,5 +429,28 @@ mod tests {
         let table = Router::new();
         let resp = table.call_or_error_bytes_with_context("nope", vec![], &());
         assert_eq!(resp, b"unknown command: nope");
+    }
+
+    #[test]
+    fn register_replaces_handler() {
+        let table = Router::new();
+        table.register("cmd", |_payload: Vec<u8>| b"first".to_vec());
+        table.register("cmd", |_payload: Vec<u8>| b"second".to_vec());
+        let resp = table.call("cmd", vec![]).unwrap();
+        assert_eq!(resp, b"second");
+    }
+
+    #[test]
+    fn register_with_context_error_propagation() {
+        let table = Router::new();
+        table.register_with_context("fail", |_payload: Vec<u8>, _ctx: &dyn std::any::Any| {
+            Err(Error::Handler("context handler failed".into()))
+        });
+        let err = table.call("fail", vec![]).unwrap_err();
+        assert!(matches!(err, Error::Handler(ref msg) if msg == "context handler failed"));
+
+        // Also verify error bytes path
+        let bytes = table.call_or_error_bytes("fail", vec![]);
+        assert_eq!(bytes, b"handler error: context handler failed");
     }
 }

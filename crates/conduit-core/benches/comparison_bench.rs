@@ -5,8 +5,8 @@
 //!   internal flow where every invoke goes through an intermediate Value.
 //!
 //! - **conduit Level 1 raw** (register): JSON bytes arrive directly at the
-//!   handler. Handler does serde_json::from_slice -> process ->
-//!   serde_json::to_vec. No intermediate Value representation.
+//!   handler. Handler does sonic_rs::from_slice -> process ->
+//!   sonic_rs::to_vec. No intermediate Value representation.
 //!
 //! - **conduit Level 1 typed** (register_json): Same as Level 1 raw, but the
 //!   deserialization/serialization is handled by the Router, not the handler.
@@ -230,9 +230,9 @@ fn level_comparison_struct(c: &mut Criterion) {
 
     // conduit Level 1 raw: receives JSON bytes, parses directly (no Value middleman)
     table.register("conduit_l1_raw_echo", |payload: Vec<u8>| {
-        let tick: MarketTick = serde_json::from_slice(&payload).unwrap();
+        let tick: MarketTick = sonic_rs::from_slice(&payload).unwrap();
         // Handler processes...
-        serde_json::to_vec(&tick).unwrap()
+        sonic_rs::to_vec(&tick).unwrap()
     });
 
     // conduit Level 1 typed: register_json handles serde for the handler
@@ -332,8 +332,8 @@ fn level_comparison_1kb(c: &mut Criterion) {
 
     // conduit Level 1 raw: JSON bytes -> MediumPayload -> JSON bytes
     table.register("conduit_l1_raw_1kb", |payload: Vec<u8>| {
-        let data: MediumPayload = serde_json::from_slice(&payload).unwrap();
-        serde_json::to_vec(&data).unwrap()
+        let data: MediumPayload = sonic_rs::from_slice(&payload).unwrap();
+        sonic_rs::to_vec(&data).unwrap()
     });
 
     // conduit Level 1 typed: register_json
@@ -432,8 +432,8 @@ fn level_comparison_64kb(c: &mut Criterion) {
 
     // conduit Level 1 raw: JSON bytes -> LargePayload -> JSON bytes
     table.register("conduit_l1_raw_64kb", |payload: Vec<u8>| {
-        let data: LargePayload = serde_json::from_slice(&payload).unwrap();
-        serde_json::to_vec(&data).unwrap()
+        let data: LargePayload = sonic_rs::from_slice(&payload).unwrap();
+        sonic_rs::to_vec(&data).unwrap()
     });
 
     // conduit Level 1 typed: register_json

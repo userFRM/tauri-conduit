@@ -1,5 +1,7 @@
-use conduit_core::{Decode, Encode, Router};
-use conduit_derive::{Decode, Encode, command};
+use std::sync::Arc;
+
+use conduit_core::{ConduitHandler, Decode, Encode, HandlerResponse};
+use conduit_derive::{Decode, Encode, command, handler};
 
 // ---------------------------------------------------------------------------
 // Test structs
@@ -318,7 +320,22 @@ fn field_named_data_does_not_shadow() {
 }
 
 // ---------------------------------------------------------------------------
-// 9. #[command] attribute macro (new context-aware signature)
+// Helper: unwrap a sync HandlerResponse
+// ---------------------------------------------------------------------------
+
+fn call_sync(
+    handler: &dyn ConduitHandler,
+    payload: Vec<u8>,
+) -> Result<Vec<u8>, conduit_core::Error> {
+    let ctx: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    match handler.call(payload, ctx) {
+        HandlerResponse::Sync(result) => result,
+        HandlerResponse::Async(_) => panic!("expected HandlerResponse::Sync"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9. #[command] attribute macro — sync handlers
 // ---------------------------------------------------------------------------
 
 #[command]
@@ -327,16 +344,13 @@ fn greet_v2(name: String, greeting: String) -> String {
 }
 
 #[test]
-fn command_v2_named_params() {
-    let router = Router::new();
-    router.register_with_context("greet_v2", greet_v2);
-
+fn command_sync_named_params() {
     let payload = serde_json::to_vec(&serde_json::json!({
         "name": "Alice",
         "greeting": "Hello"
     }))
     .unwrap();
-    let resp = router.call("greet_v2", payload).unwrap();
+    let resp = call_sync(&handler!(greet_v2), payload).unwrap();
     let result: String = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, "Hello, Alice!");
 }
@@ -351,23 +365,17 @@ fn divide_v2(a: f64, b: f64) -> Result<f64, String> {
 }
 
 #[test]
-fn command_v2_result_ok() {
-    let router = Router::new();
-    router.register_with_context("divide_v2", divide_v2);
-
+fn command_sync_result_ok() {
     let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 2.0 })).unwrap();
-    let resp = router.call("divide_v2", payload).unwrap();
+    let resp = call_sync(&handler!(divide_v2), payload).unwrap();
     let result: f64 = sonic_rs::from_slice(&resp).unwrap();
     assert!((result - 5.0).abs() < f64::EPSILON);
 }
 
 #[test]
-fn command_v2_result_err() {
-    let router = Router::new();
-    router.register_with_context("divide_v2", divide_v2);
-
+fn command_sync_result_err() {
     let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 0.0 })).unwrap();
-    let err = router.call("divide_v2", payload).unwrap_err();
+    let err = call_sync(&handler!(divide_v2), payload).unwrap_err();
     assert_eq!(err.to_string(), "handler error: division by zero");
 }
 
@@ -377,11 +385,8 @@ fn ping_v2() -> String {
 }
 
 #[test]
-fn command_v2_zero_params() {
-    let router = Router::new();
-    router.register_with_context("ping_v2", ping_v2);
-
-    let resp = router.call("ping_v2", vec![]).unwrap();
+fn command_sync_zero_params() {
+    let resp = call_sync(&handler!(ping_v2), vec![]).unwrap();
     let result: String = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, "pong");
 }
@@ -392,12 +397,9 @@ fn echo_name_v2(name: String) -> String {
 }
 
 #[test]
-fn command_v2_single_param() {
-    let router = Router::new();
-    router.register_with_context("echo_name_v2", echo_name_v2);
-
+fn command_sync_single_param() {
     let payload = serde_json::to_vec(&serde_json::json!({ "name": "test" })).unwrap();
-    let resp = router.call("echo_name_v2", payload).unwrap();
+    let resp = call_sync(&handler!(echo_name_v2), payload).unwrap();
     let result: String = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, "test");
 }
@@ -408,12 +410,331 @@ fn add_v2(a: i32, b: i32) -> i32 {
 }
 
 #[test]
-fn command_v2_non_result_return() {
-    let router = Router::new();
-    router.register_with_context("add_v2", add_v2);
-
+fn command_sync_non_result_return() {
     let payload = serde_json::to_vec(&serde_json::json!({ "a": 3, "b": 4 })).unwrap();
-    let resp = router.call("add_v2", payload).unwrap();
+    let resp = call_sync(&handler!(add_v2), payload).unwrap();
     let result: i32 = sonic_rs::from_slice(&resp).unwrap();
     assert_eq!(result, 7);
+}
+
+// ---------------------------------------------------------------------------
+// 10. #[command] attribute macro — async handlers
+// ---------------------------------------------------------------------------
+
+#[command]
+async fn async_greet(name: String) -> String {
+    format!("Hello, {name}!")
+}
+
+#[test]
+fn command_async_basic() {
+    let payload = serde_json::to_vec(&serde_json::json!({ "name": "World" })).unwrap();
+    let ctx: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+
+    match handler!(async_greet).call(payload, ctx) {
+        HandlerResponse::Async(future) => {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(future).unwrap();
+            let value: String = sonic_rs::from_slice(&result).unwrap();
+            assert_eq!(value, "Hello, World!");
+        }
+        HandlerResponse::Sync(_) => panic!("expected HandlerResponse::Async"),
+    }
+}
+
+#[command]
+async fn async_divide(a: f64, b: f64) -> Result<f64, String> {
+    if b == 0.0 {
+        Err(String::from("division by zero"))
+    } else {
+        Ok(a / b)
+    }
+}
+
+#[test]
+fn command_async_result_ok() {
+    let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 2.0 })).unwrap();
+    let ctx: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    match handler!(async_divide).call(payload, ctx) {
+        HandlerResponse::Async(future) => {
+            let resp = rt.block_on(future).unwrap();
+            let result: f64 = sonic_rs::from_slice(&resp).unwrap();
+            assert!((result - 5.0).abs() < f64::EPSILON);
+        }
+        _ => panic!("expected async"),
+    }
+}
+
+#[test]
+fn command_async_result_err() {
+    let payload = serde_json::to_vec(&serde_json::json!({ "a": 10.0, "b": 0.0 })).unwrap();
+    let ctx: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    match handler!(async_divide).call(payload, ctx) {
+        HandlerResponse::Async(future) => {
+            let err = rt.block_on(future).unwrap_err();
+            assert_eq!(err.to_string(), "handler error: division by zero");
+        }
+        _ => panic!("expected async"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 11. #[command] edge cases — bad input, zero-param async
+// ---------------------------------------------------------------------------
+
+#[command]
+async fn async_ping() -> String {
+    "async pong".to_string()
+}
+
+#[test]
+fn command_async_zero_params() {
+    let ctx: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    match handler!(async_ping).call(vec![], ctx) {
+        HandlerResponse::Async(future) => {
+            let resp = rt.block_on(future).unwrap();
+            let value: String = sonic_rs::from_slice(&resp).unwrap();
+            assert_eq!(value, "async pong");
+        }
+        _ => panic!("expected async"),
+    }
+}
+
+#[test]
+fn command_sync_bad_json() {
+    let err = call_sync(&handler!(greet_v2), b"not json".to_vec()).unwrap_err();
+    assert!(matches!(err, conduit_core::Error::Serialize(_)));
+}
+
+#[test]
+fn command_async_bad_json() {
+    let ctx: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    match handler!(greet_v2).call(b"not json".to_vec(), Arc::new(())) {
+        HandlerResponse::Sync(Err(e)) => {
+            assert!(matches!(e, conduit_core::Error::Serialize(_)));
+        }
+        _other => panic!("expected Sync(Err(Serialize)), got something else"),
+    }
+
+    // Also test the async path
+    match handler!(async_greet).call(b"not json".to_vec(), ctx) {
+        HandlerResponse::Async(future) => {
+            let err = rt.block_on(future).unwrap_err();
+            assert!(matches!(err, conduit_core::Error::Serialize(_)));
+        }
+        _ => panic!("expected async"),
+    }
+}
+
+#[test]
+fn command_sync_empty_payload_with_params() {
+    let err = call_sync(&handler!(greet_v2), vec![]).unwrap_err();
+    assert!(matches!(err, conduit_core::Error::Serialize(_)));
+}
+
+// ---------------------------------------------------------------------------
+// 12. Unit return type
+// ---------------------------------------------------------------------------
+
+#[command]
+fn fire_and_forget(message: String) {
+    let _ = message; // side effect only
+}
+
+#[test]
+fn command_sync_unit_return() {
+    let payload = serde_json::to_vec(&serde_json::json!({ "message": "hello" })).unwrap();
+    let resp = call_sync(&handler!(fire_and_forget), payload).unwrap();
+    // Unit `()` serializes to `null` in JSON.
+    let result: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(result, serde_json::Value::Null);
+}
+
+#[command]
+async fn async_fire_and_forget(message: String) {
+    let _ = message;
+}
+
+#[test]
+fn command_async_unit_return() {
+    let payload = serde_json::to_vec(&serde_json::json!({ "message": "hello" })).unwrap();
+    let ctx: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    match handler!(async_fire_and_forget).call(payload, ctx) {
+        HandlerResponse::Async(future) => {
+            let resp = rt.block_on(future).unwrap();
+            let result: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+            assert_eq!(result, serde_json::Value::Null);
+        }
+        _ => panic!("expected async"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 13. Multi-word parameter names use snake_case in JSON
+// ---------------------------------------------------------------------------
+
+#[command]
+fn greet_with_full_name(first_name: String, last_name: String) -> String {
+    format!("{first_name} {last_name}")
+}
+
+#[test]
+fn command_snake_case_params() {
+    // JSON keys match the Rust parameter names exactly (snake_case).
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "first_name": "Alice",
+        "last_name": "Smith"
+    }))
+    .unwrap();
+    let resp = call_sync(&handler!(greet_with_full_name), payload).unwrap();
+    let result: String = sonic_rs::from_slice(&resp).unwrap();
+    assert_eq!(result, "Alice Smith");
+}
+
+// ---------------------------------------------------------------------------
+// 14. Decode shadowing regression — field named __conduit_n
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Encode, Decode)]
+struct HasConduitFields {
+    __conduit_n: u32,
+    other: u32,
+}
+
+#[test]
+fn field_named_conduit_n_does_not_shadow() {
+    let original = HasConduitFields {
+        __conduit_n: 42,
+        other: 99,
+    };
+    let mut buf = Vec::new();
+    original.encode(&mut buf);
+    let (decoded, consumed) = HasConduitFields::decode(&buf).unwrap();
+    assert_eq!(decoded, original);
+    assert_eq!(consumed, buf.len());
+}
+
+// ---------------------------------------------------------------------------
+// C4 — ShadowTest: fields named after old internal variables
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Encode, Decode)]
+struct ShadowTest {
+    __conduit_buf: u32,
+    __conduit_pos: u32,
+    __conduit_val: u32,
+    __conduit_n: u32,
+}
+
+#[test]
+fn shadow_test_roundtrip() {
+    let original = ShadowTest {
+        __conduit_buf: 1,
+        __conduit_pos: 2,
+        __conduit_val: 3,
+        __conduit_n: 4,
+    };
+    let mut buf = Vec::new();
+    original.encode(&mut buf);
+    let (decoded, consumed) = ShadowTest::decode(&buf).unwrap();
+    assert_eq!(decoded, original);
+    assert_eq!(consumed, buf.len());
+}
+
+// ---------------------------------------------------------------------------
+// H7. Option<T> parameter support via #[serde(default)]
+// ---------------------------------------------------------------------------
+
+#[command]
+fn greet_optional(name: String, title: Option<u32>) -> String {
+    match title {
+        Some(t) => format!("{name} (title={t})"),
+        None => name,
+    }
+}
+
+#[test]
+fn command_option_param_present() {
+    let payload =
+        serde_json::to_vec(&serde_json::json!({ "name": "Alice", "title": 42 })).unwrap();
+    let resp = call_sync(&handler!(greet_optional), payload).unwrap();
+    let result: String = sonic_rs::from_slice(&resp).unwrap();
+    assert_eq!(result, "Alice (title=42)");
+}
+
+#[test]
+fn command_option_param_missing() {
+    // When the field is absent from JSON, #[serde(default)] should fill None.
+    let payload = serde_json::to_vec(&serde_json::json!({ "name": "Bob" })).unwrap();
+    let resp = call_sync(&handler!(greet_optional), payload).unwrap();
+    let result: String = sonic_rs::from_slice(&resp).unwrap();
+    assert_eq!(result, "Bob");
+}
+
+// ---------------------------------------------------------------------------
+// 15. Multi-word snake_case params (3+ words)
+// ---------------------------------------------------------------------------
+
+#[command]
+fn three_word_params(my_long_name: String, http_status_code: u16) -> String {
+    format!("{my_long_name}: {http_status_code}")
+}
+
+#[test]
+fn command_three_word_snake_case() {
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "my_long_name": "test",
+        "http_status_code": 200
+    }))
+    .unwrap();
+    let resp = call_sync(&handler!(three_word_params), payload).unwrap();
+    let result: String = sonic_rs::from_slice(&resp).unwrap();
+    assert_eq!(result, "test: 200");
+}
+
+// ---------------------------------------------------------------------------
+// 16. Preserved original functions — callable directly
+// ---------------------------------------------------------------------------
+
+#[test]
+fn original_sync_function_preserved() {
+    // #[command] preserves the original function — call it directly.
+    assert_eq!(greet_v2("Alice".into(), "Hello".into()), "Hello, Alice!");
+    assert_eq!(add_v2(3, 4), 7);
+    assert_eq!(ping_v2(), "pong");
+    assert_eq!(echo_name_v2("test".into()), "test");
+}
+
+#[test]
+fn original_sync_result_function_preserved() {
+    assert!((divide_v2(10.0, 2.0).unwrap() - 5.0).abs() < f64::EPSILON);
+    assert_eq!(
+        divide_v2(10.0, 0.0).unwrap_err(),
+        "division by zero"
+    );
+}
+
+#[tokio::test]
+async fn original_async_function_preserved() {
+    assert_eq!(async_greet("World".into()).await, "Hello, World!");
+    assert_eq!(async_ping().await, "async pong");
+}
+
+#[tokio::test]
+async fn original_async_result_function_preserved() {
+    assert!((async_divide(10.0, 2.0).await.unwrap() - 5.0).abs() < f64::EPSILON);
+    assert_eq!(
+        async_divide(10.0, 0.0).await.unwrap_err(),
+        "division by zero"
+    );
 }

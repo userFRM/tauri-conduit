@@ -5,11 +5,13 @@
 [![CI](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/conduit-derive.svg)](https://github.com/userFRM/tauri-conduit#license)
 
-Derive macros for [conduit-core](https://crates.io/crates/conduit-core): `Encode` and `Decode`.
+Proc macros for [conduit-core](https://crates.io/crates/conduit-core): `#[derive(Encode, Decode)]`, `#[command]`, and `handler!()`.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace.
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.0.0).
 
 ## Usage
+
+### Binary codec
 
 ```rust
 use conduit_derive::{Encode, Decode};
@@ -25,6 +27,22 @@ struct MarketTick {
 ```
 
 Supported field types: `u8`-`u64`, `i8`-`i64`, `f32`, `f64`, `bool`, `Vec<u8>`, `String`.
+
+### Command handlers
+
+```rust
+use conduit::{command, handler};
+
+#[command]
+fn greet(name: String) -> String {
+    format!("Hello, {name}!")
+}
+
+// Register with handler!() macro:
+// .handler("greet", handler!(greet))
+```
+
+`#[command]` supports named parameters, `State<T>` injection, `AppHandle`, `Window`/`Webview` injection, `Result<T, E>` returns, and `async` functions.
 
 See the [workspace README](https://github.com/userFRM/tauri-conduit) for full documentation.
 

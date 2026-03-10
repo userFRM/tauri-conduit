@@ -1,0 +1,5 @@
+error: #[command] parameters must be owned types (use String instead of &str)
+ --> tests/compile_fail/command_borrowed_param.rs:3:16
+  |
+3 | fn greet(name: &str) -> String { name.to_string() }
+  |                ^^^^

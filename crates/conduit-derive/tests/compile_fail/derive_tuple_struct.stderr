@@ -1,0 +1,5 @@
+error: Encode / Decode can only be derived for structs with named fields
+ --> tests/compile_fail/derive_tuple_struct.rs:3:8
+  |
+3 | struct Foo(u32, u32);
+  |        ^^^

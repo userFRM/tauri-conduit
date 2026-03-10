@@ -6,18 +6,18 @@
 
 use crate::error::Error;
 use crate::queue::Queue;
-use crate::ringbuf::RingBuffer;
+use crate::ringbuf::{PushOutcome, RingBuffer};
 
 // ---------------------------------------------------------------------------
 // ChannelBuffer
 // ---------------------------------------------------------------------------
 
-/// A channel buffer that is either lossy ([`RingBuffer`]) or ordered
+/// A channel buffer that is either lossy ([`RingBuffer`]) or reliable
 /// ([`Queue`]).
 ///
-/// The [`push`](Self::push) method returns `Ok(dropped_count)` — for ordered
-/// buffers the count is always `0`; for lossy buffers it is the number of
-/// oldest frames that were evicted to make room.
+/// The [`push`](Self::push) method returns `Ok(usize)` — the number of
+/// older frames evicted (always `0` for reliable channels). Use
+/// [`push_checked`](Self::push_checked) for a richer [`PushOutcome`].
 pub enum ChannelBuffer {
     /// Lossy mode: oldest frames are silently dropped when the byte budget is
     /// exceeded.
@@ -31,14 +31,27 @@ pub enum ChannelBuffer {
 impl ChannelBuffer {
     /// Push a frame into the channel.
     ///
-    /// Returns `Ok(n)` where `n` is the number of frames dropped to make room
-    /// (always `0` for ordered channels). Returns
-    /// [`Err(Error::ChannelFull)`](crate::Error::ChannelFull) if an ordered
-    /// channel's byte budget would be exceeded.
+    /// For lossy channels, returns `Ok(usize)` — the number of older frames
+    /// evicted to make room (or `0` if the frame was too large and silently
+    /// discarded). For reliable channels, returns `Ok(0)` on success or
+    /// [`Err(Error::ChannelFull)`](crate::Error::ChannelFull) if the byte
+    /// budget would be exceeded.
     pub fn push(&self, frame: &[u8]) -> Result<usize, Error> {
         match self {
             Self::Lossy(rb) => Ok(rb.push(frame)),
-            Self::Reliable(rb) => rb.push(frame).map(|()| 0),
+            Self::Reliable(q) => q.push(frame).map(|()| 0),
+        }
+    }
+
+    /// Push a frame with a richer outcome report.
+    ///
+    /// Like [`push`](Self::push), but returns [`PushOutcome`] for lossy
+    /// channels, distinguishing between accepted frames and frames that were
+    /// too large to ever fit.
+    pub fn push_checked(&self, frame: &[u8]) -> Result<PushOutcome, Error> {
+        match self {
+            Self::Lossy(rb) => Ok(rb.push_checked(frame)),
+            Self::Reliable(q) => q.push(frame).map(|()| PushOutcome::Accepted(0)),
         }
     }
 
@@ -51,7 +64,7 @@ impl ChannelBuffer {
     pub fn drain_all(&self) -> Vec<u8> {
         match self {
             Self::Lossy(rb) => rb.drain_all(),
-            Self::Reliable(rb) => rb.drain_all(),
+            Self::Reliable(q) => q.drain_all(),
         }
     }
 
@@ -62,7 +75,7 @@ impl ChannelBuffer {
     pub fn try_pop(&self) -> Option<Vec<u8>> {
         match self {
             Self::Lossy(rb) => rb.try_pop(),
-            Self::Reliable(rb) => rb.try_pop(),
+            Self::Reliable(q) => q.try_pop(),
         }
     }
 
@@ -71,7 +84,7 @@ impl ChannelBuffer {
     pub fn frame_count(&self) -> usize {
         match self {
             Self::Lossy(rb) => rb.frame_count(),
-            Self::Reliable(rb) => rb.frame_count(),
+            Self::Reliable(q) => q.frame_count(),
         }
     }
 
@@ -80,7 +93,7 @@ impl ChannelBuffer {
     pub fn bytes_used(&self) -> usize {
         match self {
             Self::Lossy(rb) => rb.bytes_used(),
-            Self::Reliable(rb) => rb.bytes_used(),
+            Self::Reliable(q) => q.bytes_used(),
         }
     }
 
@@ -88,11 +101,11 @@ impl ChannelBuffer {
     pub fn clear(&self) {
         match self {
             Self::Lossy(rb) => rb.clear(),
-            Self::Reliable(rb) => rb.clear(),
+            Self::Reliable(q) => q.clear(),
         }
     }
 
-    /// Returns `true` if this channel uses ordered (guaranteed-delivery)
+    /// Returns `true` if this channel uses reliable (guaranteed-delivery)
     /// buffering.
     #[must_use]
     pub fn is_ordered(&self) -> bool {
@@ -104,7 +117,7 @@ impl std::fmt::Debug for ChannelBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lossy(rb) => f.debug_tuple("ChannelBuffer::Lossy").field(rb).finish(),
-            Self::Reliable(rb) => f.debug_tuple("ChannelBuffer::Reliable").field(rb).finish(),
+            Self::Reliable(q) => f.debug_tuple("ChannelBuffer::Reliable").field(q).finish(),
         }
     }
 }
@@ -133,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_delegates_correctly() {
+    fn reliable_delegates_correctly() {
         let cb = ChannelBuffer::Reliable(Queue::new(1024));
 
         let dropped = cb.push(b"alpha").unwrap();
@@ -153,19 +166,17 @@ mod tests {
         let cb = ChannelBuffer::Lossy(RingBuffer::new(8));
 
         // First push fills the buffer.
-        let dropped = cb.push(b"aaaa").unwrap();
-        assert_eq!(dropped, 0);
+        assert_eq!(cb.push(b"aaaa").unwrap(), 0);
 
         // Second push evicts the first — but never errors.
-        let dropped = cb.push(b"bbbb").unwrap();
-        assert_eq!(dropped, 1);
+        assert_eq!(cb.push(b"bbbb").unwrap(), 1);
 
         assert_eq!(cb.frame_count(), 1);
         assert_eq!(cb.try_pop().unwrap(), b"bbbb");
     }
 
     #[test]
-    fn push_ordered_errors_when_full() {
+    fn push_reliable_errors_when_full() {
         // Capacity for exactly 2 frames of 4 bytes (cost = 16).
         let cb = ChannelBuffer::Reliable(Queue::new(16));
 
@@ -181,21 +192,40 @@ mod tests {
     }
 
     #[test]
+    fn push_checked_lossy() {
+        let cb = ChannelBuffer::Lossy(RingBuffer::new(8));
+        assert_eq!(cb.push_checked(b"aaaa").unwrap(), PushOutcome::Accepted(0));
+        assert_eq!(cb.push_checked(b"bbbb").unwrap(), PushOutcome::Accepted(1));
+
+        // Too large for buffer (cost 104 > 8).
+        assert_eq!(cb.push_checked(&[0u8; 100]).unwrap(), PushOutcome::TooLarge);
+    }
+
+    #[test]
+    fn push_checked_reliable() {
+        let cb = ChannelBuffer::Reliable(Queue::new(16));
+        assert_eq!(cb.push_checked(b"aaaa").unwrap(), PushOutcome::Accepted(0));
+        assert_eq!(cb.push_checked(b"bbbb").unwrap(), PushOutcome::Accepted(0));
+        let err = cb.push_checked(b"cccc").unwrap_err();
+        assert!(matches!(err, Error::ChannelFull));
+    }
+
+    #[test]
     fn drain_format_identical() {
         let lossy = ChannelBuffer::Lossy(RingBuffer::new(1024));
-        let ordered = ChannelBuffer::Reliable(Queue::new(1024));
+        let reliable = ChannelBuffer::Reliable(Queue::new(1024));
 
         // Push identical data to both.
         let frames: &[&[u8]] = &[b"hello", b"world", b"test"];
         for frame in frames {
             lossy.push(frame).unwrap();
-            ordered.push(frame).unwrap();
+            reliable.push(frame).unwrap();
         }
 
         let lossy_blob = lossy.drain_all();
-        let ordered_blob = ordered.drain_all();
+        let reliable_blob = reliable.drain_all();
 
-        assert_eq!(lossy_blob, ordered_blob);
+        assert_eq!(lossy_blob, reliable_blob);
         assert!(!lossy_blob.is_empty());
     }
 

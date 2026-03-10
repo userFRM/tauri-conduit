@@ -39,11 +39,14 @@ const unsub = await subscribe('telemetry', (buf) => {
 
 ## API
 
-- `invoke<T>(cmd, args?, options?)` — JSON request/response
-- `invokeBinary(cmd, payload?, options?)` — binary request/response
-- `subscribe(channel, callback)` — event-driven push streaming (no polling)
+- `invoke<T>(cmd, args?, options?)` — JSON request/response (drop-in replacement for Tauri's `invoke`)
+- `invokeBinary(cmd, payload?, options?)` — binary request/response (raw bytes)
+- `subscribe(channel, callback, onError?)` — event-driven push streaming (no polling)
 - `drain(channel)` — pull-based ring buffer access (user controls timing)
-- `connect()` — explicit connection lifecycle
+- `connect()` — explicit connection lifecycle, returns a `Conduit` instance
+- `resetConduit()` — force re-bootstrap (useful during development hot-reload)
+- `parseDrainBlob(buf)` — parse drain wire format into individual `Uint8Array` frames
+- `ConduitError` — structured error with `status`, `target`, and `message` fields
 
 ## License
 

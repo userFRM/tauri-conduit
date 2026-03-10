@@ -38,15 +38,21 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { bootstrap, type BootstrapInfo } from './negotiate.js';
 import { createProtocolTransport, type ProtocolTransport } from './transport/protocol.js';
+import { ConduitError } from './error.js';
+
+const _encoder = new TextEncoder();
+const _decoder = new TextDecoder();
 
 // ── Re-exports ──────────────────────────────────────────────────
 
 export { FRAME_HEADER_SIZE, PROTOCOL_VERSION, MsgType } from './codec/frame.js';
 export type { FrameHeader } from './codec/frame.js';
 export { packFrame, unpackFrame } from './codec/frame.js';
+export { parseDrainBlob } from './codec/wire.js';
 export { DEFAULT_TIMEOUT_MS } from './transport/protocol.js';
 export type { ProtocolTransport } from './transport/protocol.js';
 export type { BootstrapInfo } from './negotiate.js';
+export { ConduitError } from './error.js';
 
 // ── Public types ────────────────────────────────────────────────
 
@@ -60,7 +66,18 @@ export interface InvokeOptions {
 export type UnsubscribeFn = UnlistenFn;
 
 export interface Conduit {
-  /** Send a command with JSON args and await a typed response. */
+  /**
+   * Send a command with JSON args and await a typed response.
+   *
+   * @note Commands returning `()` resolve to `null`. This matches Tauri's
+   * `invoke()` behavior. For null-safety, use `invoke<MyType | null>(cmd)`.
+   * No runtime type validation is performed on the response — `T` is an
+   * unchecked assertion, same as Tauri's built-in invoke.
+   *
+   * @warning The response is parsed with `JSON.parse` which does not sanitize
+   * `__proto__` keys. Do not spread the result into other objects without
+   * validation if the command handler is untrusted.
+   */
   invoke<T>(cmd: string, args?: Record<string, unknown>, options?: InvokeOptions): Promise<T>;
   /** Send a command with a raw binary payload and get raw bytes back. */
   invokeBinary(cmd: string, payload?: Uint8Array, options?: InvokeOptions): Promise<ArrayBuffer>;
@@ -89,7 +106,11 @@ export interface Conduit {
    * // Later: unsub();
    * ```
    */
-  subscribe(channel: string, callback: (data: ArrayBuffer) => void): Promise<UnsubscribeFn>;
+  subscribe(
+    channel: string,
+    callback: (data: ArrayBuffer) => void,
+    onError?: (err: Error) => void,
+  ): Promise<UnsubscribeFn>;
   /** Available channel names from bootstrap. */
   readonly channels: string[];
   /** Release resources and unsubscribe all listeners. */
@@ -107,36 +128,79 @@ function buildConduit(
 ): Conduit {
   const unsubscribers: UnsubscribeFn[] = [];
 
+  // Base headers sent with every conduit request (invoke key + webview label)
+  const _baseHeaders: Record<string, string> = {
+    'X-Conduit-Key': bootstrapInfo.invokeKey,
+  };
+  if (bootstrapInfo.webviewLabel) {
+    _baseHeaders['X-Conduit-Webview'] = bootstrapInfo.webviewLabel;
+  }
+
   async function drainChannel(channel: string): Promise<ArrayBuffer> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000); // 30s default
     const url =
       `${bootstrapInfo.protocolBase}/drain/${encodeURIComponent(channel)}`;
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'X-Conduit-Key': bootstrapInfo.invokeKey },
-    });
-    if (!response.ok) {
-      throw new Error(`tauri-conduit: drain failed: ${response.status}`);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: _baseHeaders,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new ConduitError(response.status, channel, errorBody);
+      }
+      return response.arrayBuffer();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new ConduitError(408, channel, 'drain timed out');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    return response.arrayBuffer();
   }
 
   async function subscribeToChannel(
     channel: string,
     callback: (data: ArrayBuffer) => void,
+    onError?: (err: Error) => void,
   ): Promise<UnsubscribeFn> {
     const unlisten = await listen<string>(
       'conduit:data-available',
       async (event) => {
-        if (event.payload === channel) {
+        if (event.payload !== channel) return;
+        try {
           const buf = await drainChannel(channel);
           if (buf.byteLength > 0) {
             callback(buf);
           }
+        } catch (err) {
+          if (onError) {
+            onError(err instanceof Error ? err : new Error(String(err)));
+          } else {
+            console.error(`conduit: drain error on channel "${channel}":`, err);
+          }
         }
       },
     );
-    unsubscribers.push(unlisten);
-    return unlisten;
+    const wrappedUnlisten = () => {
+      const idx = unsubscribers.indexOf(wrappedUnlisten);
+      if (idx !== -1) unsubscribers.splice(idx, 1);
+      unlisten();
+    };
+    unsubscribers.push(wrappedUnlisten);
+    // Initial drain to catch data pushed before the listener was registered.
+    try {
+      const buf = await drainChannel(channel);
+      if (buf.byteLength > 0) {
+        callback(buf);
+      }
+    } catch {
+      // Ignore — channel may be empty
+    }
+    return wrappedUnlisten;
   }
 
   return {
@@ -145,16 +209,12 @@ function buildConduit(
       args?: Record<string, unknown>,
       options?: InvokeOptions,
     ): Promise<T> {
-      let payload: Uint8Array | undefined;
-      if (args !== undefined) {
-        const encoder = new TextEncoder();
-        payload = encoder.encode(JSON.stringify(args));
-      }
+      const payload = _encoder.encode(JSON.stringify(args ?? {}));
 
-      const raw = await protocol.invoke(cmd, payload, options?.timeout);
+      const extra = _baseHeaders['X-Conduit-Webview'] ? { 'X-Conduit-Webview': _baseHeaders['X-Conduit-Webview'] } : undefined;
+      const raw = await protocol.invoke(cmd, payload, options?.timeout, extra);
 
-      const decoder = new TextDecoder();
-      const text = decoder.decode(raw);
+      const text = _decoder.decode(raw);
 
       if (text.length === 0) return undefined as T;
 
@@ -166,7 +226,8 @@ function buildConduit(
       payload?: Uint8Array,
       options?: InvokeOptions,
     ): Promise<ArrayBuffer> {
-      return protocol.invoke(cmd, payload, options?.timeout);
+      const extra = _baseHeaders['X-Conduit-Webview'] ? { 'X-Conduit-Webview': _baseHeaders['X-Conduit-Webview'] } : undefined;
+      return protocol.invoke(cmd, payload, options?.timeout, extra);
     },
 
     drain: drainChannel,
@@ -176,10 +237,13 @@ function buildConduit(
     channels: bootstrapInfo.channels ?? [],
 
     disconnect() {
-      for (const unsub of unsubscribers) {
+      // Snapshot before clearing — wrappedUnlisten mutates `unsubscribers`
+      // via splice, so iterating the live array would skip entries.
+      const snapshot = [...unsubscribers];
+      unsubscribers.length = 0;
+      for (const unsub of snapshot) {
         unsub();
       }
-      unsubscribers.length = 0;
     },
   };
 }
@@ -228,6 +292,20 @@ function getConduit(): Promise<Conduit> {
  *
  * Commands are routed through the custom protocol transport (conduit://)
  * which is in-process and Tauri-approved.
+ *
+ * @note Commands returning `()` resolve to `null`. This matches Tauri's
+ * `invoke()` behavior. For null-safety, use `invoke<MyType | null>(cmd)`.
+ * No runtime type validation is performed on the response — `T` is an
+ * unchecked assertion, same as Tauri's built-in invoke.
+ *
+ * @note Error handling differs from Tauri's built-in invoke: conduit throws
+ * `ConduitError` (with `status`, `target`, `message` fields) instead of
+ * Tauri's raw error values. Catch blocks need updating:
+ * `catch(e) { if (e instanceof ConduitError) { e.status, e.message } }`
+ *
+ * @warning The response is parsed with `JSON.parse` which does not sanitize
+ * `__proto__` keys. Do not spread the result into other objects without
+ * validation if the command handler is untrusted.
  */
 export async function invoke<T>(
   cmd: string,
@@ -282,8 +360,28 @@ export async function drain(channel: string): Promise<ArrayBuffer> {
 export async function subscribe(
   channel: string,
   callback: (data: ArrayBuffer) => void,
+  onError?: (err: Error) => void,
 ): Promise<UnsubscribeFn> {
   const conduit = await getConduit();
-  return conduit.subscribe(channel, callback);
+  return conduit.subscribe(channel, callback, onError);
 }
 
+/**
+ * Reset the global Conduit singleton, forcing re-bootstrap on next use.
+ *
+ * This is primarily useful during development when page reloads lose JS state
+ * but the Rust backend continues running. The next `invoke()` / `subscribe()`
+ * call will automatically re-bootstrap the transport.
+ */
+export async function resetConduit(): Promise<void> {
+  const pending = _conduit;
+  _conduit = null;
+  if (pending) {
+    try {
+      const c = await pending;
+      c.disconnect();
+    } catch {
+      // Bootstrap may have failed — nothing to disconnect
+    }
+  }
+}

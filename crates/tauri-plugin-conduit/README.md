@@ -7,16 +7,24 @@
 
 Tauri v2 plugin for [conduit](https://github.com/userFRM/tauri-conduit) -- binary IPC over the `conduit://` custom protocol.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace.
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.0.0).
 
 ## Usage
 
 ```rust
+use conduit::{command, handler};
+
+#[command]
+fn greet(name: String) -> String {
+    format!("Hello, {name}!")
+}
+
 tauri::Builder::default()
     .plugin(
         tauri_plugin_conduit::init()
-            .command("ping", |_| b"pong".to_vec())
+            .handler("greet", handler!(greet))
             .channel("telemetry")
+            .channel_ordered("events")
             .build()
     )
     .run(tauri::generate_context!())
@@ -27,7 +35,7 @@ tauri::Builder::default()
 
 - Per-launch 32-byte invoke key with constant-time validation
 - No network surface -- everything runs in-process
-- Integrates with Tauri's capability-based permission system
+- Flat invoke key (no per-command ACL) -- simpler than Tauri's capability system
 
 See the [workspace README](https://github.com/userFRM/tauri-conduit) for full documentation, streaming examples, and benchmark numbers.
 

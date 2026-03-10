@@ -57,6 +57,9 @@ jobs:
       - name: Type check
         working-directory: packages/tauri-plugin-conduit
         run: npx tsc --noEmit
+      - name: Run TypeScript tests
+        run: npx tsx --test src/__tests__/*.test.ts
+        working-directory: packages/tauri-plugin-conduit
 
   tauri-plugin-conduit:
     name: tauri-plugin-conduit
@@ -73,6 +76,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev libayatana-appindicator3-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
       - name: Check tauri-plugin-conduit
         run: cargo check --manifest-path crates/tauri-plugin-conduit/Cargo.toml
+      - name: Test plugin
+        run: cargo test --manifest-path crates/tauri-plugin-conduit/Cargo.toml
       - name: Clippy tauri-plugin-conduit
         run: cargo clippy --manifest-path crates/tauri-plugin-conduit/Cargo.toml -- -D warnings
 

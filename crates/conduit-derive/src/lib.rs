@@ -4,7 +4,7 @@
 //! and `#[command]` for Tauri-style named-parameter handlers.
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Fields, FnArg, ItemFn, Pat, parse_macro_input};
 
 /// Derive the `Encode` trait for a struct with named fields.
@@ -111,7 +111,7 @@ fn impl_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .map(|f| {
             let ident = f.ident.as_ref().unwrap();
             quote! {
-                conduit_core::Encode::encode(&self.#ident, buf);
+                ::conduit_core::Encode::encode(&self.#ident, buf);
             }
         })
         .collect();
@@ -122,7 +122,7 @@ fn impl_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .map(|f| {
             let ident = f.ident.as_ref().unwrap();
             quote! {
-                conduit_core::Encode::encode_size(&self.#ident)
+                ::conduit_core::Encode::encode_size(&self.#ident)
             }
         })
         .collect();
@@ -137,7 +137,7 @@ fn impl_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     };
 
     Ok(quote! {
-        impl conduit_core::Encode for #name {
+        impl ::conduit_core::Encode for #name {
             fn encode(&self, buf: &mut Vec<u8>) {
                 #(#encode_stmts)*
             }
@@ -162,8 +162,11 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .map(|f| {
             let ident = f.ident.as_ref().unwrap();
             quote! {
-                let (#ident, __n) = conduit_core::Decode::decode(&__data[__offset..])?;
-                __offset += __n;
+                let #ident = {
+                    let (__cdec_v__, __cdec_n__) = ::conduit_core::Decode::decode(&__cdec_src__[__cdec_off__..])?;
+                    __cdec_off__ += __cdec_n__;
+                    __cdec_v__
+                };
             }
         })
         .collect();
@@ -175,11 +178,11 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .collect();
 
     Ok(quote! {
-        impl conduit_core::Decode for #name {
-            fn decode(__data: &[u8]) -> Option<(Self, usize)> {
-                let mut __offset = 0usize;
+        impl ::conduit_core::Decode for #name {
+            fn decode(__cdec_src__: &[u8]) -> Option<(Self, usize)> {
+                let mut __cdec_off__ = 0usize;
                 #(#decode_stmts)*
-                Some((Self { #(#field_names),* }, __offset))
+                Some((Self { #(#field_names),* }, __cdec_off__))
             }
         }
     })
@@ -189,23 +192,28 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 // #[command] attribute macro
 // ---------------------------------------------------------------------------
 
-/// Attribute macro that transforms a function into a context-aware conduit
-/// handler with the signature:
+/// Attribute macro that transforms a function into a conduit command handler.
 ///
-/// ```text
-/// fn name(Vec<u8>, &dyn Any) -> Result<Vec<u8>, conduit_core::Error>
-/// ```
+/// Preserves the original function and generates a hidden handler struct
+/// (`__conduit_handler_{fn_name}`) implementing [`conduit_core::ConduitHandler`].
+/// Use [`handler!`] to obtain the handler struct for registration.
 ///
-/// This is conduit's equivalent of `#[tauri::command]`. The macro supports:
+/// This is conduit's 1:1 equivalent of `#[tauri::command]`. The macro supports:
 ///
 /// - **Named parameters** — generates a hidden args struct with
-///   `#[derive(Deserialize)]`.
+///   `#[derive(Deserialize)]`. Parameter names stay snake_case (no camelCase
+///   conversion).
 /// - **`State<T>` injection** — parameters whose type path ends in `State`
 ///   are extracted from the context (which must be an `AppHandle<Wry>`).
+/// - **`AppHandle` injection** — parameters whose type path ends in `AppHandle`.
+/// - **`Window`/`WebviewWindow` injection** — parameters whose type path ends
+///   in `Window` or `WebviewWindow`, resolved via `app_handle.get_webview_window(label)`.
+/// - **`Webview` injection** — parameters whose type path ends in `Webview`,
+///   resolved via `app_handle.get_webview(label)`.
 /// - **`Result<T, E>` returns** — errors are converted via `Display` into
 ///   `conduit_core::Error::Handler`.
-/// - **`async` functions** — wrapped with
-///   `tokio::runtime::Handle::current().block_on()`.
+/// - **`async` functions** — truly async, spawned on the tokio runtime
+///   (not `block_on`).
 ///
 /// # Examples
 ///
@@ -231,8 +239,47 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 ///     state.get_user(id).await.map_err(|e| e.to_string())
 /// }
 /// ```
+///
+/// # Error handling
+///
+/// When a `Result`-returning handler returns `Err(e)`, the error's
+/// `Display` text is sent to the frontend as a JSON error response.
+/// This matches `#[tauri::command]` behavior. Be careful about what
+/// information your error types expose via `Display`.
+///
+/// # Limitations
+///
+/// - **`tauri::Wry` only**: Generated handlers assume `tauri::Wry` as the
+///   runtime backend. This is the default (and typically only) runtime in
+///   Tauri v2.
+/// - **Multiple `State<T>` params**: Each `State<T>` must use a distinct
+///   concrete type `T`. Tauri's state system is keyed by `TypeId`, so two
+///   params with the same `T` will receive the same instance.
+/// - **Name-based injection detection**: `State`, `AppHandle`, `Window`,
+///   `WebviewWindow`, and `Webview` are identified by the last path segment
+///   of the type. Any user type with these names will be misinterpreted as
+///   a Tauri injectable type. Rename your types to avoid false matches.
+/// - **Name-based Result detection**: The return type is detected as
+///   `Result` by checking the last path segment. Type aliases like
+///   `type MyResult<T> = Result<T, E>` are NOT detected as Result returns
+///   and will be serialized directly instead of unwrapping `Ok`/`Err`.
+/// - **Window/Webview require label**: `Window` and `Webview` injection
+///   requires the frontend to send the `X-Conduit-Webview` header (handled
+///   automatically by the TS client). If no label is available, the handler
+///   returns an error.
+/// - **No `impl` block support**: The macro generates struct definitions
+///   at the call site, which is illegal inside `impl` blocks. Only use
+///   `#[command]` on free-standing functions.
 #[proc_macro_attribute]
-pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn command(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[command] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
     let func = parse_macro_input!(item as ItemFn);
     match impl_conduit_command(func) {
         Ok(tokens) => tokens.into(),
@@ -240,23 +287,11 @@ pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Convert a snake_case string to PascalCase.
-fn pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(c) => {
-                    let upper: String = c.to_uppercase().collect();
-                    upper + chars.as_str()
-                }
-                None => String::new(),
-            }
-        })
-        .collect()
-}
-
 /// Check if a type is `State<...>` by looking at the last path segment.
+///
+/// **Limitation**: This matches any type whose last path segment is `State`,
+/// not just `tauri::State`. If you have a custom type named `State`, rename
+/// it to avoid being treated as an injectable Tauri state parameter.
 fn is_state_type(ty: &syn::Type) -> bool {
     if let syn::Type::Reference(type_ref) = ty {
         // Handle &State<...> (reference to State)
@@ -265,6 +300,19 @@ fn is_state_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         if let Some(seg) = type_path.path.segments.last() {
             return seg.ident == "State";
+        }
+    }
+    false
+}
+
+/// Check if a type is `AppHandle<...>` by looking at the last path segment.
+fn is_app_handle_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Reference(type_ref) = ty {
+        return is_app_handle_type(&type_ref.elem);
+    }
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "AppHandle";
         }
     }
     false
@@ -298,6 +346,46 @@ fn extract_state_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
     None
 }
 
+/// Check if a type is `Window` or `WebviewWindow` by looking at the last path segment.
+///
+/// Both `Window` and `WebviewWindow` are treated identically — the generated
+/// code calls `app_handle.get_webview_window(label)` which returns a
+/// `WebviewWindow` (the unified type in Tauri v2).
+fn is_window_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Reference(type_ref) = ty {
+        return is_window_type(&type_ref.elem);
+    }
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "Window" || seg.ident == "WebviewWindow";
+        }
+    }
+    false
+}
+
+/// Check if a type is `Webview` by looking at the last path segment.
+fn is_webview_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Reference(type_ref) = ty {
+        return is_webview_type(&type_ref.elem);
+    }
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "Webview";
+        }
+    }
+    false
+}
+
+/// Check if a type is `Option<...>` by looking at the last path segment.
+fn is_option_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "Option";
+        }
+    }
+    false
+}
+
 /// Check if the return type is `Result<...>`.
 fn is_result_return(output: &syn::ReturnType) -> bool {
     match output {
@@ -315,18 +403,69 @@ fn is_result_return(output: &syn::ReturnType) -> bool {
 
 /// Implementation of the `#[command]` attribute macro.
 ///
-/// Generates a function with signature:
-/// `fn name(__payload: Vec<u8>, __ctx: &dyn Any) -> Result<Vec<u8>, conduit_core::Error>`
+/// Preserves the original function and generates a hidden handler struct
+/// (`__conduit_handler_{fn_name}`) implementing [`conduit_core::ConduitHandler`].
+/// This mirrors `#[tauri::command]` behavior: the function remains callable
+/// directly, and the handler struct is used for registration via
+/// `conduit::handler!(fn_name)`.
 fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     let fn_name = &func.sig.ident;
     let fn_vis = &func.vis;
+    let fn_sig = &func.sig;
+    let fn_block = &func.block;
     let fn_attrs = &func.attrs;
-    let fn_stmts = &func.block.stmts;
     let is_async = func.sig.asyncness.is_some();
 
-    // Separate State params from regular params
+    if !func.sig.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &func.sig.generics,
+            "#[command] cannot be used on generic functions",
+        ));
+    }
+
+    if func.sig.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &func.sig.generics.where_clause,
+            "#[command] cannot be used on functions with where clauses",
+        ));
+    }
+
+    for arg in &func.sig.inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            if matches!(&*pat_type.ty, syn::Type::ImplTrait(_)) {
+                return Err(syn::Error::new_spanned(
+                    &pat_type.ty,
+                    "#[command] cannot be used with `impl Trait` parameters",
+                ));
+            }
+        }
+    }
+
+    // Reject borrowed types on regular (non-State, non-AppHandle) parameters.
+    for arg in &func.sig.inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            if !is_state_type(&pat_type.ty)
+                && !is_app_handle_type(&pat_type.ty)
+                && matches!(&*pat_type.ty, syn::Type::Reference(_))
+            {
+                return Err(syn::Error::new_spanned(
+                    &pat_type.ty,
+                    "#[command] parameters must be owned types (use String instead of &str)",
+                ));
+            }
+        }
+    }
+
+    let handler_struct_name = format_ident!("__conduit_handler_{}", fn_name);
+
+    // Separate State, AppHandle, Window/Webview, and regular params
     let mut state_params: Vec<(&syn::Ident, &syn::Type)> = Vec::new();
+    let mut app_handle_params: Vec<(&syn::Ident, &syn::Type)> = Vec::new();
+    let mut window_params: Vec<(&syn::Ident, &syn::Type)> = Vec::new();
+    let mut webview_params: Vec<(&syn::Ident, &syn::Type)> = Vec::new();
     let mut regular_params: Vec<(&syn::Ident, &syn::Type)> = Vec::new();
+    // Track all params in original order for the function call
+    let mut all_param_names: Vec<&syn::Ident> = Vec::new();
 
     for arg in &func.sig.inputs {
         if let FnArg::Receiver(_) = arg {
@@ -337,11 +476,25 @@ fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
         }
         if let FnArg::Typed(pat_type) = arg {
             if let Pat::Ident(pat_ident) = &*pat_type.pat {
+                if pat_ident.by_ref.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &pat_type.pat,
+                        "#[command] does not support `ref` parameter bindings",
+                    ));
+                }
                 let param_name = &pat_ident.ident;
                 let param_type = &*pat_type.ty;
 
+                all_param_names.push(param_name);
+
                 if is_state_type(param_type) {
                     state_params.push((param_name, param_type));
+                } else if is_app_handle_type(param_type) {
+                    app_handle_params.push((param_name, param_type));
+                } else if is_window_type(param_type) {
+                    window_params.push((param_name, param_type));
+                } else if is_webview_type(param_type) {
+                    webview_params.push((param_name, param_type));
                 } else {
                     regular_params.push((param_name, param_type));
                 }
@@ -357,23 +510,20 @@ fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     // Detect Result return type
     let is_result = is_result_return(&func.sig.output);
 
-    // Capture the original return type for closure annotation
-    let fn_output = &func.sig.output;
-
     // Generate args struct for regular params
     let has_args = !regular_params.is_empty();
-    let struct_name = syn::Ident::new(
-        &format!("__Conduit{}Args", pascal_case(&fn_name.to_string())),
-        fn_name.span(),
-    );
+    let struct_name = format_ident!("__conduit_args_{}", fn_name);
 
     let regular_names: Vec<_> = regular_params.iter().map(|(n, _)| *n).collect();
-    let regular_types: Vec<_> = regular_params.iter().map(|(_, t)| *t).collect();
 
     let has_state = !state_params.is_empty();
+    let has_app_handle = !app_handle_params.is_empty();
+    let has_window = !window_params.is_empty();
+    let has_webview = !webview_params.is_empty();
+    let needs_context = has_state || has_app_handle || has_window || has_webview;
 
-    // State extraction code
-    let state_extraction = if has_state {
+    // Context extraction code (State, AppHandle, Window, Webview injection)
+    let state_extraction = if needs_context {
         let state_stmts: Vec<proc_macro2::TokenStream> = state_params
             .iter()
             .map(|(name, ty)| {
@@ -381,25 +531,85 @@ fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
                 match inner_ty {
                     Some(inner) => {
                         quote! {
-                            let #name: ::tauri::State<'_, #inner> = ::tauri::Manager::state(__app);
+                            let #name: ::tauri::State<'_, #inner> = ::tauri::Manager::state(&*__app);
                         }
                     }
                     None => {
                         // Fallback: use the full type as-is
                         quote! {
-                            let #name: #ty = ::tauri::Manager::state(__app);
+                            let #name: #ty = ::tauri::Manager::state(&*__app);
                         }
                     }
                 }
             })
             .collect();
-        quote! {
-            let __app = __ctx
+
+        let app_handle_stmts: Vec<proc_macro2::TokenStream> = app_handle_params
+            .iter()
+            .map(|(name, _ty)| {
+                quote! {
+                    let #name = __app.clone();
+                }
+            })
+            .collect();
+
+        // Window/WebviewWindow injection: look up by webview label from HandlerContext
+        let window_stmts: Vec<proc_macro2::TokenStream> = window_params
+            .iter()
+            .map(|(name, _ty)| {
+                quote! {
+                    let #name = {
+                        let __label = __handler_ctx.webview_label.as_ref()
+                            .ok_or_else(|| ::conduit_core::Error::Handler(
+                                "Window injection requires X-Conduit-Webview header".into()
+                            ))?;
+                        ::tauri::Manager::get_webview_window(&*__app, __label)
+                            .ok_or_else(|| ::conduit_core::Error::Handler(
+                                ::std::format!("webview window '{}' not found", __label)
+                            ))?
+                    };
+                }
+            })
+            .collect();
+
+        // Webview injection
+        let webview_stmts: Vec<proc_macro2::TokenStream> = webview_params
+            .iter()
+            .map(|(name, _ty)| {
+                quote! {
+                    let #name = {
+                        let __label = __handler_ctx.webview_label.as_ref()
+                            .ok_or_else(|| ::conduit_core::Error::Handler(
+                                "Webview injection requires X-Conduit-Webview header".into()
+                            ))?;
+                        ::tauri::Manager::get_webview(&*__app, __label)
+                            .ok_or_else(|| ::conduit_core::Error::Handler(
+                                ::std::format!("webview '{}' not found", __label)
+                            ))?
+                    };
+                }
+            })
+            .collect();
+
+        let context_downcast = quote! {
+            let __handler_ctx = __ctx
+                .downcast_ref::<::conduit_core::HandlerContext>()
+                .ok_or_else(|| ::conduit_core::Error::Handler(
+                    "internal: handler context must be HandlerContext".into()
+                ))?;
+            let __app = __handler_ctx.app_handle
                 .downcast_ref::<::tauri::AppHandle<::tauri::Wry>>()
                 .ok_or_else(|| ::conduit_core::Error::Handler(
-                    "internal: handler context must be AppHandle<Wry>".into()
+                    "internal: handler context app_handle must be AppHandle<Wry>".into()
                 ))?;
+        };
+
+        quote! {
+            #context_downcast
             #(#state_stmts)*
+            #(#app_handle_stmts)*
+            #(#window_stmts)*
+            #(#webview_stmts)*
         }
     } else {
         quote! {}
@@ -409,36 +619,29 @@ fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     let args_deser = if has_args {
         quote! {
             let #struct_name { #(#regular_names),* } =
-                ::sonic_rs::from_slice(&__payload)
+                ::conduit_core::sonic_rs::from_slice(&__payload)
                     .map_err(::conduit_core::Error::from)?;
         }
     } else {
         quote! {
-            // Accept empty body or null — no deserialization needed.
             let _ = &__payload;
         }
     };
 
-    // Body execution (async vs sync)
-    let body_exec = if is_async {
-        quote! {
-            ::tokio::runtime::Handle::current().block_on(async move {
-                #(#fn_stmts)*
-            })
-        }
+    // Function call — delegates to the preserved original function
+    let fn_call = if is_async {
+        quote! { #fn_name(#(#all_param_names),*).await }
     } else {
-        quote! {
-            (|| #fn_output { #(#fn_stmts)* })()
-        }
+        quote! { #fn_name(#(#all_param_names),*) }
     };
 
     // Result handling
     let result_handling = if is_result {
         quote! {
-            let __result = #body_exec;
+            let __result = #fn_call;
             match __result {
                 ::std::result::Result::Ok(__v) => {
-                    ::sonic_rs::to_vec(&__v).map_err(::conduit_core::Error::from)
+                    ::conduit_core::sonic_rs::to_vec(&__v).map_err(::conduit_core::Error::from)
                 }
                 ::std::result::Result::Err(__e) => {
                     ::std::result::Result::Err(::conduit_core::Error::Handler(__e.to_string()))
@@ -447,36 +650,113 @@ fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
         }
     } else {
         quote! {
-            let __result = #body_exec;
-            ::sonic_rs::to_vec(&__result).map_err(::conduit_core::Error::from)
+            let __result = #fn_call;
+            ::conduit_core::sonic_rs::to_vec(&__result).map_err(::conduit_core::Error::from)
         }
     };
 
-    // Generate struct definition (only if has args)
+    // Generate args struct definition (only if has regular params)
     let struct_def = if has_args {
+        // Add #[serde(default)] on Option<T> fields so they can be omitted from JSON.
+        let field_defs: Vec<proc_macro2::TokenStream> = regular_params
+            .iter()
+            .map(|(name, ty)| {
+                if is_option_type(ty) {
+                    quote! { #[serde(default)] #name: #ty }
+                } else {
+                    quote! { #name: #ty }
+                }
+            })
+            .collect();
         quote! {
             #[doc(hidden)]
+            #[allow(non_camel_case_types)]
             #[derive(::conduit_core::serde::Deserialize)]
-            #[serde(crate = "conduit_core::serde")]
-            #fn_vis struct #struct_name {
-                #(#regular_names: #regular_types),*
+            #[serde(crate = "::conduit_core::serde")]
+            struct #struct_name {
+                #(#field_defs),*
             }
         }
     } else {
         quote! {}
     };
 
+    // Generate the handler body — sync wraps in a closure, async in Box::pin
+    let handler_body = if is_async {
+        quote! {
+            ::conduit_core::HandlerResponse::Async(::std::boxed::Box::pin(async move {
+                #state_extraction
+                #args_deser
+                #result_handling
+            }))
+        }
+    } else {
+        quote! {
+            ::conduit_core::HandlerResponse::Sync((|| -> ::std::result::Result<::std::vec::Vec<u8>, ::conduit_core::Error> {
+                #state_extraction
+                #args_deser
+                #result_handling
+            })())
+        }
+    };
+
     Ok(quote! {
         #struct_def
 
+        // Preserved original function — callable directly in tests and non-conduit contexts.
         #(#fn_attrs)*
-        #fn_vis fn #fn_name(
-            __payload: ::std::vec::Vec<u8>,
-            __ctx: &dyn ::std::any::Any,
-        ) -> ::std::result::Result<::std::vec::Vec<u8>, ::conduit_core::Error> {
-            #state_extraction
-            #args_deser
-            #result_handling
+        #fn_vis #fn_sig #fn_block
+
+        // Hidden handler struct for conduit registration.
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        #fn_vis struct #handler_struct_name;
+
+        impl ::conduit_core::ConduitHandler for #handler_struct_name {
+            fn call(
+                &self,
+                __payload: ::std::vec::Vec<u8>,
+                __ctx: ::std::sync::Arc<dyn ::std::any::Any + ::std::marker::Send + ::std::marker::Sync>,
+            ) -> ::conduit_core::HandlerResponse {
+                #handler_body
+            }
         }
     })
+}
+
+/// Resolve a `#[command]` function name to its generated handler struct.
+///
+/// Expands `handler!(foo)` to the hidden unit struct `__conduit_handler_foo`
+/// that `#[command]` generates alongside the original function. The struct
+/// implements [`conduit_core::ConduitHandler`] and is intended for
+/// registration with `PluginBuilder::handler`.
+///
+/// # Requirements
+///
+/// The target function **must** have `#[command]` applied. If `#[command]`
+/// is missing, the compiler will report "cannot find value
+/// `__conduit_handler_foo` in this scope".
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use conduit::{command, handler};
+///
+/// #[command]
+/// fn greet(name: String) -> String {
+///     format!("Hello, {name}!")
+/// }
+///
+/// // Register with the plugin builder:
+/// tauri_plugin_conduit::init()
+///     .handler("greet", handler!(greet))
+///     .build()
+/// ```
+#[proc_macro]
+pub fn handler(input: TokenStream) -> TokenStream {
+    let mut path = parse_macro_input!(input as syn::Path);
+    if let Some(last) = path.segments.last_mut() {
+        last.ident = format_ident!("__conduit_handler_{}", last.ident);
+    }
+    quote! { #path }.into()
 }

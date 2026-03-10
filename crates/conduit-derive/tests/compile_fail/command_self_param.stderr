@@ -1,0 +1,5 @@
+error: #[command] cannot be used on methods with `self`
+ --> tests/compile_fail/command_self_param.rs:7:23
+  |
+7 |     fn method_handler(&self) -> Vec<u8> {
+  |                       ^^^^^

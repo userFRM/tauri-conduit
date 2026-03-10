@@ -22,8 +22,9 @@ cargo clippy --workspace
 
 ```
 crates/
-  conduit-core/     Core library (codec, router, ring buffer)
-  conduit-derive/   Proc macros (Encode, Decode)
+  conduit/          Facade crate (re-exports #[command], handler!, core types)
+  conduit-core/     Core library (codec, router, ring buffer, handler trait)
+  conduit-derive/   Proc macros (Encode, Decode, #[command], handler!)
   tauri-plugin-conduit/  Tauri v2 plugin (requires Tauri app context)
 packages/
   tauri-plugin-conduit/  TypeScript client (tauri-plugin-conduit)
@@ -35,7 +36,7 @@ packages/
 cargo test --workspace          # All Rust tests
 cargo clippy --workspace        # Lint check
 cargo bench --workspace         # Benchmarks (requires criterion)
-cd packages/tauri-conduit && npx tsc --noEmit  # TypeScript type check
+cd packages/tauri-plugin-conduit && npx tsc --noEmit  # TypeScript type check
 ```
 
 ### Code Style
@@ -43,7 +44,7 @@ cd packages/tauri-conduit && npx tsc --noEmit  # TypeScript type check
 - Follow existing patterns in the codebase
 - All public items must have doc comments
 - No `unsafe` code without justification
-- Prefer `std::sync` over `tokio::sync` in conduit-core (handlers are synchronous)
+- Prefer `std::sync` over `tokio::sync` in conduit-core (no tokio dependency)
 - Use `unwrap_or_else(|e| e.into_inner())` for mutex poisoning recovery
 
 ### Architecture Principles

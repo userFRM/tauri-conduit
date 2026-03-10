@@ -1,0 +1,5 @@
+error: Encode / Decode cannot be derived for enums
+ --> tests/compile_fail/derive_enum.rs:3:6
+  |
+3 | enum Foo { A, B }
+  |      ^^^
