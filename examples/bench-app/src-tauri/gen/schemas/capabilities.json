@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capability for bench-app","local":true,"windows":["main"],"permissions":["core:default","conduit:default"]}}

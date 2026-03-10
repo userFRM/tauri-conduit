@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Default capability for bench-app",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "conduit:default"
+  ]
+}

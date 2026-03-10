@@ -1,0 +1,6 @@
+[default]
+description = "Default permissions for the conduit plugin — allows bootstrap and subscribe."
+permissions = [
+    "allow-bootstrap",
+    "allow-conduit-subscribe",
+]

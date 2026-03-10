@@ -27,6 +27,39 @@ jobs:
         with:
           generate_release_notes: true
 
+  crates-publish:
+    name: Publish to crates.io
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish conduit-core
+        run: cargo publish -p conduit-core --token "${{ secrets.CARGO_REGISTRY_TOKEN }}" || echo "conduit-core already published, skipping"
+
+      - name: Publish conduit-derive
+        run: cargo publish -p conduit-derive --token "${{ secrets.CARGO_REGISTRY_TOKEN }}" || echo "conduit-derive already published, skipping"
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish conduit
+        run: cargo publish -p conduit --token "${{ secrets.CARGO_REGISTRY_TOKEN }}" || echo "conduit already published, skipping"
+
+      - name: Wait for crates.io index update (conduit)
+        run: sleep 30
+
+      - name: Install system dependencies for tauri-plugin-conduit
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+
+      - name: Publish tauri-plugin-conduit
+        working-directory: crates/tauri-plugin-conduit
+        run: cargo publish --token "${{ secrets.CARGO_REGISTRY_TOKEN }}" || echo "tauri-plugin-conduit already published, skipping"
+
   npm-publish:
     name: Publish to npm
     needs: ci

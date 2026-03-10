@@ -202,14 +202,26 @@ impl<R: Runtime> PluginState<R> {
             .ok_or_else(|| format!("unknown channel: {channel}"))?;
         ch.push(data).map(|_| ()).map_err(|e| e.to_string())?;
         // Emit global event (backward-compatible with old JS code).
-        if self.app_handle.emit("conduit:data-available", channel).is_err() {
+        if self
+            .app_handle
+            .emit("conduit:data-available", channel)
+            .is_err()
+        {
             #[cfg(debug_assertions)]
-            eprintln!("conduit: failed to emit global data-available event for channel '{channel}'");
+            eprintln!(
+                "conduit: failed to emit global data-available event for channel '{channel}'"
+            );
         }
         // Emit per-channel event.
-        if self.app_handle.emit(&format!("conduit:data-available:{channel}"), channel).is_err() {
+        if self
+            .app_handle
+            .emit(&format!("conduit:data-available:{channel}"), channel)
+            .is_err()
+        {
             #[cfg(debug_assertions)]
-            eprintln!("conduit: failed to emit per-channel data-available event for channel '{channel}'");
+            eprintln!(
+                "conduit: failed to emit per-channel data-available event for channel '{channel}'"
+            );
         }
         Ok(())
     }
@@ -531,8 +543,7 @@ impl PluginBuilder {
         let name = name.into();
         validate_channel_name(&name);
         self.assert_no_duplicate_channel(&name);
-        self.channel_defs
-            .push((name, ChannelKind::Lossy(capacity)));
+        self.channel_defs.push((name, ChannelKind::Lossy(capacity)));
         self
     }
 
@@ -642,7 +653,8 @@ impl PluginBuilder {
                     Some(v) => match v.to_str() {
                         Ok(s) => s.to_string(),
                         Err(_) => {
-                            responder.respond(make_error_response(401, "invalid invoke key header"));
+                            responder
+                                .respond(make_error_response(401, "invalid invoke key header"));
                             return;
                         }
                     },
@@ -681,7 +693,8 @@ impl PluginBuilder {
                             // injection attacks, but in a multi-webview app, code in one
                             // webview could impersonate another. This matches Tauri's own
                             // trust model where all JS in the webview is equally trusted.
-                            let webview_label = request.headers()
+                            let webview_label = request
+                                .headers()
                                 .get("X-Conduit-Webview")
                                 .and_then(|v| v.to_str().ok())
                                 .filter(|s| {
@@ -696,7 +709,8 @@ impl PluginBuilder {
                                 Arc::new(app_handle),
                                 webview_label,
                             );
-                            let ctx_any: Arc<dyn std::any::Any + Send + Sync> = Arc::new(handler_ctx);
+                            let ctx_any: Arc<dyn std::any::Any + Send + Sync> =
+                                Arc::new(handler_ctx);
 
                             // SAFETY: AssertUnwindSafe is used here because:
                             // - `body` is a Vec<u8> (unwind-safe by itself)
@@ -704,17 +718,23 @@ impl PluginBuilder {
                             // - conduit's own locks use poison-recovery helpers (lock_or_recover)
                             // - User-defined handler state may be left inconsistent after panic,
                             //   but this is inherent to catch_unwind and documented as a limitation.
-                            let result = std::panic::catch_unwind(
-                                std::panic::AssertUnwindSafe(|| handler.call(body, ctx_any)),
-                            );
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    handler.call(body, ctx_any)
+                                }));
 
                             match result {
                                 Ok(HandlerResponse::Sync(Ok(bytes))) => {
-                                    responder.respond(make_response(200, "application/octet-stream", bytes));
+                                    responder.respond(make_response(
+                                        200,
+                                        "application/octet-stream",
+                                        bytes,
+                                    ));
                                 }
                                 Ok(HandlerResponse::Sync(Err(e))) => {
                                     let status = error_to_status(&e);
-                                    responder.respond(make_error_response(status, &sanitize_error(&e)));
+                                    responder
+                                        .respond(make_error_response(status, &sanitize_error(&e)));
                                 }
                                 Ok(HandlerResponse::Async(future)) => {
                                     // Truly async — spawned on tokio, just like #[tauri::command].
@@ -733,11 +753,17 @@ impl PluginBuilder {
                                             }
                                             Ok(Err(e)) => {
                                                 let status = error_to_status(&e);
-                                                responder.respond(make_error_response(status, &sanitize_error(&e)));
+                                                responder.respond(make_error_response(
+                                                    status,
+                                                    &sanitize_error(&e),
+                                                ));
                                             }
                                             Err(_) => {
                                                 // Panic during async handler execution
-                                                responder.respond(make_error_response(500, "handler panicked"));
+                                                responder.respond(make_error_response(
+                                                    500,
+                                                    "handler panicked",
+                                                ));
                                             }
                                         }
                                     });
@@ -758,13 +784,10 @@ impl PluginBuilder {
                             // - conduit's own locks use poison-recovery helpers (lock_or_recover)
                             // - User-defined handler state may be left inconsistent after panic,
                             //   but this is inherent to catch_unwind and documented as a limitation.
-                            let result = std::panic::catch_unwind(
-                                std::panic::AssertUnwindSafe(|| {
-                                    dispatch.call_with_context(
-                                        &target, body, &app_handle,
-                                    )
-                                }),
-                            );
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    dispatch.call_with_context(&target, body, &app_handle)
+                                }));
                             match result {
                                 Ok(Ok(bytes)) => {
                                     responder.respond(make_response(
@@ -775,7 +798,8 @@ impl PluginBuilder {
                                 }
                                 Ok(Err(e)) => {
                                     let status = error_to_status(&e);
-                                    responder.respond(make_error_response(status, &sanitize_error(&e)));
+                                    responder
+                                        .respond(make_error_response(status, &sanitize_error(&e)));
                                 }
                                 Err(_) => {
                                     // Panic caught by catch_unwind — keep as 500.
@@ -784,20 +808,18 @@ impl PluginBuilder {
                             }
                         }
                     }
-                    "drain" => {
-                        match state.channel(&target) {
-                            Some(ch) => {
-                                let blob = ch.drain_all();
-                                responder.respond(make_response(200, "application/octet-stream", blob));
-                            }
-                            None => {
-                                responder.respond(make_error_response(
-                                    404,
-                                    &format!("unknown channel: {}", sanitize_name(&target)),
-                                ));
-                            }
+                    "drain" => match state.channel(&target) {
+                        Some(ch) => {
+                            let blob = ch.drain_all();
+                            responder.respond(make_response(200, "application/octet-stream", blob));
                         }
-                    }
+                        None => {
+                            responder.respond(make_error_response(
+                                404,
+                                &format!("unknown channel: {}", sanitize_name(&target)),
+                            ));
+                        }
+                    },
                     _ => {
                         responder.respond(make_error_response(
                             404,
@@ -1461,8 +1483,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "duplicate channel name")]
     fn duplicate_channel_different_kinds_panics() {
-        PluginBuilder::new()
-            .channel("data")
-            .channel_ordered("data");
+        PluginBuilder::new().channel("data").channel_ordered("data");
     }
 }
