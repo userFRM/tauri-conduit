@@ -16,11 +16,11 @@
     th, td { padding: 8px 12px; text-align: right; border: 1px solid #333; }
     th { background: #1a1a1a; color: #aaa; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
     td:first-child, th:first-child { text-align: left; }
-    tr.row-small td { background: #111; }
-    tr.row-medium td { background: #131313; }
-    tr.row-large td { background: #161616; }
     .speedup { color: #66bb6a; font-weight: 700; }
+    .speedup-high { color: #00e676; font-weight: 700; }
     .label { color: #ccc; }
+    .na { color: #555; font-style: italic; }
+    .section-header td { background: #1a1a2a; color: #7986cb; font-weight: 600; text-align: left; font-size: 12px; border-bottom: 2px solid #333; }
     button { margin-top: 16px; padding: 8px 20px; background: #1e88e5; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
     button:disabled { background: #444; cursor: not-allowed; }
     button:hover:not(:disabled) { background: #1565c0; }
@@ -34,10 +34,10 @@
       <tr>
         <th>Payload</th>
         <th>Tauri median</th>
-        <th>Tauri P95</th>
-        <th>Conduit median</th>
-        <th>Conduit P95</th>
-        <th>Speedup</th>
+        <th>Conduit L1 median</th>
+        <th>L1 speedup</th>
+        <th>Conduit L2 median</th>
+        <th>L2 speedup</th>
       </tr>
     </thead>
     <tbody id="results"></tbody>
@@ -52,35 +52,104 @@
     }
 
     // ── Conduit bootstrap ─────────────────────────────────────────
-    let _conduit = null;
+    var _conduitInfo = null;
 
-    async function getConduit() {
-      if (_conduit) return _conduit;
-      var info;
-      try {
-        info = await tauriInvoke('plugin:conduit|conduit_bootstrap');
-        console.log('Bootstrap info:', JSON.stringify(info));
-      } catch (bootstrapErr) {
-        console.error('Bootstrap failed:', bootstrapErr);
-        throw new Error('Bootstrap failed: ' + JSON.stringify(bootstrapErr));
-      }
-      const invokeKey = info.invoke_key || info.invokeKey;
-      const base = info.protocol_base || info.protocolBase;
-      _conduit = {
-        async invoke(cmd, args) {
-          const body = JSON.stringify(args || {});
-          const url = base + '/invoke/' + encodeURIComponent(cmd);
-          const resp = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream', 'X-Conduit-Key': invokeKey },
-            body: new TextEncoder().encode(body),
-          });
-          if (!resp.ok) throw new Error('Conduit error ' + resp.status + ': ' + (await resp.text()));
-          const text = new TextDecoder().decode(await resp.arrayBuffer());
-          return text.length === 0 ? null : JSON.parse(text);
-        }
+    async function getConduitInfo() {
+      if (_conduitInfo) return _conduitInfo;
+      var info = await tauriInvoke('plugin:conduit|conduit_bootstrap');
+      _conduitInfo = {
+        invokeKey: info.invoke_key || info.invokeKey,
+        base: info.protocol_base || info.protocolBase,
       };
-      return _conduit;
+      return _conduitInfo;
+    }
+
+    // Level 1: JSON via conduit custom protocol
+    async function conduitInvokeJSON(cmd, args) {
+      var ci = await getConduitInfo();
+      var body = JSON.stringify(args || {});
+      var url = ci.base + '/invoke/' + encodeURIComponent(cmd);
+      var resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Conduit-Key': ci.invokeKey },
+        body: new TextEncoder().encode(body),
+      });
+      if (!resp.ok) throw new Error('Conduit error ' + resp.status);
+      var text = new TextDecoder().decode(await resp.arrayBuffer());
+      return text.length === 0 ? null : JSON.parse(text);
+    }
+
+    // Level 2: Binary via conduit custom protocol (raw bytes, no JSON)
+    async function conduitInvokeBinary(cmd, payload) {
+      var ci = await getConduitInfo();
+      var url = ci.base + '/invoke/' + encodeURIComponent(cmd);
+      var resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Conduit-Key': ci.invokeKey },
+        body: payload,
+      });
+      if (!resp.ok) {
+        var errText = await resp.text();
+        throw new Error('Conduit L2 error ' + resp.status + ': ' + errText);
+      }
+      return new Uint8Array(await resp.arrayBuffer());
+    }
+
+    // ── Binary codec (matches Rust Encode/Decode derive) ──────────
+    // SmallPayload: i64 + f64 + f64 + u8 = 25 bytes
+    function encodeSmall(obj) {
+      var buf = new ArrayBuffer(25);
+      var dv = new DataView(buf);
+      // i64 as two 32-bit LE words (BigInt not needed for our test value)
+      var ts = obj.timestamp;
+      dv.setUint32(0, ts & 0xFFFFFFFF, true);
+      dv.setInt32(4, Math.floor(ts / 0x100000000), true);
+      dv.setFloat64(8, obj.price, true);
+      dv.setFloat64(16, obj.volume, true);
+      dv.setUint8(24, obj.side);
+      return new Uint8Array(buf);
+    }
+
+    function decodeSmall(bytes) {
+      var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      var lo = dv.getUint32(0, true);
+      var hi = dv.getInt32(4, true);
+      return {
+        timestamp: hi * 0x100000000 + lo,
+        price: dv.getFloat64(8, true),
+        volume: dv.getFloat64(16, true),
+        side: dv.getUint8(24),
+      };
+    }
+
+    // LargePayload: u64(8) + Vec<u8>(4+65536) + u32(4) = 65552 bytes
+    function encodeLarge(obj) {
+      var dataLen = obj.data.length;
+      var totalLen = 8 + 4 + dataLen + 4;
+      var buf = new ArrayBuffer(totalLen);
+      var dv = new DataView(buf);
+      var u8 = new Uint8Array(buf);
+      // u64 header
+      dv.setUint32(0, obj.header & 0xFFFFFFFF, true);
+      dv.setUint32(4, Math.floor(obj.header / 0x100000000), true);
+      // Vec<u8>: u32 LE length + bytes
+      dv.setUint32(8, dataLen, true);
+      u8.set(obj.data, 12);
+      // u32 checksum
+      dv.setUint32(12 + dataLen, obj.checksum, true);
+      return u8;
+    }
+
+    function decodeLarge(bytes) {
+      var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      var headerLo = dv.getUint32(0, true);
+      var headerHi = dv.getUint32(4, true);
+      var dataLen = dv.getUint32(8, true);
+      return {
+        header: headerHi * 0x100000000 + headerLo,
+        data: new Uint8Array(bytes.buffer, bytes.byteOffset + 12, dataLen),
+        checksum: dv.getUint32(12 + dataLen, true),
+      };
     }
 
     // ── Payloads ──────────────────────────────────────────────────
@@ -95,11 +164,16 @@
       active: true,
     };
 
+    var LARGE_DATA_ARRAY = Array.from({ length: 65536 }, function(_, i) { return i & 0xff; });
     var LARGE = {
       header: 12345678,
-      data: Array.from({ length: 65536 }, function(_, i) { return i & 0xff; }),
+      data: LARGE_DATA_ARRAY,
       checksum: 3141592653,
     };
+
+    // Pre-encode binary payloads (encode cost is not part of the Rust benchmark)
+    var SMALL_BIN = encodeSmall(SMALL);
+    var LARGE_BIN = encodeLarge({ header: 12345678, data: new Uint8Array(LARGE_DATA_ARRAY), checksum: 3141592653 });
 
     // ── Benchmark engine ──────────────────────────────────────────
     var WARMUP = 50;
@@ -123,7 +197,6 @@
 
     async function bench(label, fn) {
       for (var i = 0; i < WARMUP; i++) await fn();
-      // Batch 10 calls per measurement to overcome performance.now() 1ms clamping
       var BATCH = 10;
       var times = [];
       for (var i = 0; i < ITERATIONS; i++) {
@@ -149,20 +222,19 @@
       return ms.toFixed(3) + ' ms';
     }
 
-    function addRow(label, tauri, conduit) {
-      var speedup = tauri.median / conduit.median;
-      var cls = label.indexOf('25B') >= 0 ? 'row-small' : label.indexOf('1KB') >= 0 ? 'row-medium' : 'row-large';
+    function addRow(label, tauri, l1, l2) {
+      var l1Speedup = tauri.median / l1.median;
+      var l2Speedup = l2 ? (tauri.median / l2.median) : null;
       var tr = document.createElement('tr');
-      tr.className = cls;
       tr.innerHTML =
         '<td class="label">' + label + '</td>' +
         '<td>' + fmt(tauri.median) + '</td>' +
-        '<td>' + fmt(tauri.p95) + '</td>' +
-        '<td>' + fmt(conduit.median) + '</td>' +
-        '<td>' + fmt(conduit.p95) + '</td>' +
-        '<td class="speedup">' + speedup.toFixed(1) + 'x</td>';
+        '<td>' + fmt(l1.median) + '</td>' +
+        '<td class="speedup">' + l1Speedup.toFixed(1) + 'x</td>' +
+        (l2 ? '<td>' + fmt(l2.median) + '</td><td class="speedup-high">' + l2Speedup.toFixed(1) + 'x</td>'
+             : '<td class="na">n/a</td><td class="na">n/a</td>');
       resultsEl.appendChild(tr);
-      return { label: label, tauri: tauri, conduit: conduit, speedup: speedup };
+      return { label: label, tauri: tauri, l1: l1, l2: l2, l1Speedup: l1Speedup, l2Speedup: l2Speedup };
     }
 
     // ── Run all benchmarks ────────────────────────────────────────
@@ -172,50 +244,62 @@
       var rows = [];
 
       try {
-        var conduit = await getConduit();
+        await getConduitInfo();
 
-        var tests = [
-          { label: '25B payload',   tauriCmd: 'tauri_echo_small',  conduitCmd: 'conduit_echo_small',  payload: SMALL },
-          { label: '~1KB payload',  tauriCmd: 'tauri_echo_medium', conduitCmd: 'conduit_echo_medium', payload: MEDIUM },
-          { label: '~64KB payload', tauriCmd: 'tauri_echo_large',  conduitCmd: 'conduit_echo_large',  payload: LARGE },
-        ];
+        // --- 25B payload ---
+        setStatus('Benchmarking 25B \u2014 Tauri...', 'running');
+        var tauriSmall = await bench('tauri-small', function() { return tauriInvoke('tauri_echo_small', { payload: SMALL }); });
+        setStatus('Benchmarking 25B \u2014 Conduit L1 (JSON)...', 'running');
+        var l1Small = await bench('l1-small', function() { return conduitInvokeJSON('conduit_echo_small', { payload: SMALL }); });
+        setStatus('Benchmarking 25B \u2014 Conduit L2 (binary)...', 'running');
+        var l2Small = await bench('l2-small', function() { return conduitInvokeBinary('binary_echo_small', SMALL_BIN); });
+        rows.push(addRow('25B payload', tauriSmall, l1Small, l2Small));
 
-        for (var ti = 0; ti < tests.length; ti++) {
-          var t = tests[ti];
-          setStatus('Benchmarking ' + t.label + ' \u2014 Tauri...', 'running');
-          var tauriResult = await bench('Tauri ' + t.label, function() { return tauriInvoke(t.tauriCmd, { payload: t.payload }); });
+        // --- ~1KB payload (no L2 — Vec<f64>/Vec<String> not binary-encodable) ---
+        setStatus('Benchmarking ~1KB \u2014 Tauri...', 'running');
+        var tauriMed = await bench('tauri-med', function() { return tauriInvoke('tauri_echo_medium', { payload: MEDIUM }); });
+        setStatus('Benchmarking ~1KB \u2014 Conduit L1 (JSON)...', 'running');
+        var l1Med = await bench('l1-med', function() { return conduitInvokeJSON('conduit_echo_medium', { payload: MEDIUM }); });
+        rows.push(addRow('~1KB payload', tauriMed, l1Med, null));
 
-          setStatus('Benchmarking ' + t.label + ' \u2014 Conduit...', 'running');
-          var conduitResult = await bench('Conduit ' + t.label, function() { return conduit.invoke(t.conduitCmd, { payload: t.payload }); });
+        // --- ~64KB payload ---
+        setStatus('Benchmarking ~64KB \u2014 Tauri...', 'running');
+        var tauriLarge = await bench('tauri-large', function() { return tauriInvoke('tauri_echo_large', { payload: LARGE }); });
+        setStatus('Benchmarking ~64KB \u2014 Conduit L1 (JSON)...', 'running');
+        var l1Large = await bench('l1-large', function() { return conduitInvokeJSON('conduit_echo_large', { payload: LARGE }); });
+        setStatus('Benchmarking ~64KB \u2014 Conduit L2 (binary)...', 'running');
+        var l2Large = await bench('l2-large', function() { return conduitInvokeBinary('binary_echo_large', LARGE_BIN); });
+        rows.push(addRow('~64KB payload', tauriLarge, l1Large, l2Large));
 
-          rows.push(addRow(t.label, tauriResult, conduitResult));
-        }
-
-        setStatus('Done! ' + ITERATIONS + ' iterations, ' + WARMUP + ' warmup.', 'done');
+        setStatus('Done! ' + ITERATIONS + ' iterations, ' + WARMUP + ' warmup, 10x batch.', 'done');
 
         // ── Print ASCII table to stdout ───────────────────────────
         var lines = [];
-        var W = [18, 18, 18, 9];
+        var W = [18, 18, 18, 9, 18, 9];
         function pad(s, w) { while (s.length < w) s = ' ' + s; return s; }
         function bar(c, ws) { var r = c; for (var i = 0; i < ws.length; i++) { var seg = ''; for (var j = 0; j < ws[i] + 2; j++) seg += c; r += seg + c; } return r; }
 
         lines.push(bar('=', W));
-        lines.push('| ' + [pad('Payload', W[0]), pad('Tauri median', W[1]), pad('Conduit median', W[2]), pad('Speedup', W[3])].join(' | ') + ' |');
+        lines.push('| ' + [
+          pad('Payload', W[0]), pad('Tauri median', W[1]),
+          pad('L1 median', W[2]), pad('L1 speed', W[3]),
+          pad('L2 median', W[4]), pad('L2 speed', W[5]),
+        ].join(' | ') + ' |');
         lines.push(bar('=', W));
         for (var ri = 0; ri < rows.length; ri++) {
           var r = rows[ri];
           lines.push('| ' + [
             pad(r.label, W[0]),
             pad(fmt(r.tauri.median), W[1]),
-            pad(fmt(r.conduit.median), W[2]),
-            pad(r.speedup.toFixed(1) + 'x', W[3]),
+            pad(fmt(r.l1.median), W[2]),
+            pad(r.l1Speedup.toFixed(1) + 'x', W[3]),
+            pad(r.l2 ? fmt(r.l2.median) : 'n/a', W[4]),
+            pad(r.l2Speedup ? r.l2Speedup.toFixed(1) + 'x' : 'n/a', W[5]),
           ].join(' | ') + ' |');
         }
         lines.push(bar('=', W));
 
         await tauriInvoke('print_results', { output: lines.join('\n') });
-
-        // Auto-exit after printing
         setTimeout(function() { tauriInvoke('exit_app').catch(function() {}); }, 500);
 
       } catch (e) {

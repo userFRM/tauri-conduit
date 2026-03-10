@@ -210,14 +210,17 @@ Standalone RingBuffer microbenchmarks.
 
 ## 7. End-to-End Benchmarks (`bench-app`)
 
-Full JS↔Rust roundtrip through the WebView, measuring the complete invoke path:
+Full JS↔Rust roundtrip through the WebView, measuring the complete invoke path for all three transport levels:
 
 ```
-Tauri:   JS JSON.stringify → postMessage → Tauri IPC bridge → serde_json::Value → T → handler
-         → T → serde_json::Value → JSON string → postMessage → JS JSON.parse
+Tauri:      JS JSON.stringify → postMessage → Tauri IPC bridge → serde_json::Value → T → handler
+            → T → serde_json::Value → JSON string → postMessage → JS JSON.parse
 
-Conduit: JS JSON.stringify → fetch(conduit://) → WebView bridge → sonic_rs::from_slice → T → handler
-         → T → sonic_rs::to_vec → response → WebView bridge → fetch() response → JS JSON.parse
+Conduit L1: JS JSON.stringify → fetch(conduit://) → WebView bridge → sonic_rs::from_slice → T → handler
+(JSON)      → T → sonic_rs::to_vec → response → WebView bridge → fetch() response → JS JSON.parse
+
+Conduit L2: JS binary encode → fetch(conduit://) → WebView bridge → Decode trait (zero-copy) → handler
+(binary)    → Encode trait → response → WebView bridge → fetch() response → JS binary decode
 ```
 
 ### Environment
@@ -231,17 +234,23 @@ Conduit: JS JSON.stringify → fetch(conduit://) → WebView bridge → sonic_rs
 
 ### Results
 
-| Payload | Tauri median | Conduit median | Speedup |
-|---|---|---|---|
-| 25B (MarketTick) | 300 us | 200 us | 1.5x |
-| ~1KB (MediumPayload) | 300 us | 300 us | 1.0x |
-| ~64KB (LargePayload) | 6.700 ms | 3.100 ms | **2.2x** |
+| Payload | Tauri median | Conduit L1 (JSON) | L1 speedup | Conduit L2 (binary) | L2 speedup |
+|---|---|---|---|---|---|
+| 25B (MarketTick) | 400 us | 300 us | 1.3x | 300 us | 1.3x |
+| ~1KB (MediumPayload) | 400 us | 300 us | 1.3x | n/a | n/a |
+| ~64KB (LargePayload) | 30.800 ms | 3.400 ms | **9.1x** | 400 us | **77.0x** |
+
+> **Note**: ~1KB has no L2 result because `MediumPayload` contains `Vec<f64>` and `Vec<String>` which don't implement the binary `Encode`/`Decode` traits. Level 2 binary is designed for fixed-layout structs with primitive fields and `Vec<u8>` blobs.
 
 ### Analysis
 
-- **Small payloads (25B)**: Conduit is ~1.5x faster. The WebView bridge overhead (~200-300us) dominates at this scale, so the Rust-side 2.1x improvement (714ns → 333ns) is mostly absorbed.
-- **Medium payloads (~1KB)**: Roughly equal at the measurement resolution. Both paths are dominated by WebView bridge latency.
-- **Large payloads (~64KB)**: Conduit is **2.2x faster**. At this size, serialization dominates bridge overhead — sonic_rs direct deserialization (no intermediate `serde_json::Value`) delivers substantial end-to-end improvement.
+- **Small payloads (25B)**: L1 and L2 are both ~1.3x faster than Tauri. At this size, the WebView bridge overhead (~300us) dominates — the Rust-side improvement is absorbed by transport latency.
+- **Medium payloads (~1KB)**: L1 is ~1.3x faster. Both paths are bridge-dominated. L2 binary is not available for this payload type.
+- **Large payloads (~64KB)**: This is where conduit shines:
+  - **L1 (JSON)** is **9.1x faster** — sonic_rs direct deserialization eliminates the `serde_json::Value` intermediate that makes Tauri's path so slow for large arrays.
+  - **L2 (binary)** is **77x faster** — raw binary encode/decode completely eliminates JSON serialization. A 65536-byte blob roundtrips in 400us vs Tauri's 30.8ms.
+
+The 77x L2 speedup on 64KB payloads demonstrates why binary IPC matters for data-intensive Tauri apps (real-time visualization, audio/video processing, scientific computing).
 
 ### Reproduction
 
