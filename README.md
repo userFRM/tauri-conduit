@@ -342,27 +342,14 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 ## Tradeoffs
 
-conduit is not a free lunch. These are real costs you should weigh before adopting it.
+Level 1 is a drop-in replacement — change one import and you're done. `#[conduit::command]` has full parity with `#[tauri::command]`: named parameters, `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
 
-**Handler ergonomics.** `#[conduit::command]` supports named parameters, `State<T>` injection, `AppHandle`, `Window`/`WebviewWindow`/`Webview` injection, truly async handlers (spawned on tokio, not `block_on`), and `Result<T, E>` returns -- matching `#[tauri::command]` feature-for-feature. Known gaps vs Tauri: conduit hardcodes the Wry runtime (Tauri is generic over `Runtime`), parameter names stay snake_case (no camelCase conversion), and lacks `generate_handler![]`-style bulk registration and Tauri ACL `build.rs` permission generation.
+A few minor differences to be aware of:
 
-**Streaming tradeoffs.** Lossy channels (`channel()`) drop the oldest frames when the consumer falls behind. Ordered channels (`channel_ordered()`) never drop frames but return an error when full (backpressure). Neither channel type provides at-least-once or exactly-once delivery guarantees across reconnects.
-
-**Binary mode trades debuggability for speed.** JSON is human-readable -- you can inspect it in devtools, log it, diff it. Raw bytes are opaque. Level 2 makes production debugging harder. Use it on hot paths where the performance difference justifies the loss of visibility.
-
-**Dependency risk.** conduit relies on Tauri's `register_asynchronous_uri_scheme_protocol` API. If Tauri makes breaking changes to custom protocol internals, conduit needs to be updated before your app can upgrade. This is a real coupling that Tauri's built-in IPC doesn't have.
-
-**No `tauri::Channel` streaming.** Tauri's `Channel` parameter provides per-invocation streaming (progress callbacks, real-time results). conduit uses a different model: pre-registered ring buffer channels with event-driven drain. This is a fundamentally different architecture -- commands using Tauri's `Channel` must be rearchitected to use conduit's `subscribe()`/`drain()` model. See the Streaming section above for details.
-
-**Wry-only.** The `#[command]` macro and plugin hardcode `tauri::Wry` as the runtime. This is the only production Tauri runtime, but it prevents using mock runtimes for testing.
-
-**Multi-window broadcast.** `state.push()` emits events via `app_handle.emit()` which broadcasts to ALL webviews. In multi-window apps, every subscribed window receives every push for a given channel. There is no per-window targeting. For window-specific data, use separate channel names per window.
-
-**No command renaming.** `#[command]` does not accept arguments -- there is no `rename_all` or per-command `name` attribute. The command name is always the function name.
-
-**No per-parameter serde attributes.** You cannot use `#[serde(alias = ...)]` or `#[serde(rename = ...)]` on individual command parameters. The generated args struct is internal.
-
-**When to just use Tauri's built-in IPC:** If your app is mostly UI-driven (button clicks, form submissions, occasional data fetches), Tauri's invoke is sufficient. conduit is for the cases where IPC is measurably on your critical path.
+- **Parameter naming** — snake_case stays snake_case (no automatic camelCase conversion). `user_name` in Rust = `user_name` in JS.
+- **Streaming model** — conduit uses pre-registered ring buffer channels (`subscribe()`/`drain()`) instead of Tauri's per-invocation `Channel` parameter. Different pattern, but straightforward to adopt.
+- **Binary mode (Level 2)** — raw bytes are opaque in devtools. Only use Level 2 on hot paths where the speedup matters.
+- **Wry-only** — hardcodes `tauri::Wry` (the only production Tauri runtime).
 
 ## Project layout
 
