@@ -21,6 +21,9 @@ pub const FRAME_HEADER_SIZE: usize = 11;
 /// Current protocol version written into every frame.
 pub const PROTOCOL_VERSION: u8 = 1;
 
+/// Per-frame overhead in the drain wire format: 4 bytes for the u32 LE length prefix.
+pub const DRAIN_FRAME_OVERHEAD: usize = 4;
+
 // ---------------------------------------------------------------------------
 // MsgType
 // ---------------------------------------------------------------------------
@@ -40,6 +43,11 @@ pub enum MsgType {
     /// Error frame (`0x04`).
     Error,
     /// Any other message type (user-defined, `0x10`+).
+    ///
+    /// **Warning:** `Other(v)` where `v` matches a known variant (0x00, 0x01,
+    /// 0x02, 0x04) will NOT roundtrip: `MsgType::from_u8(v)` returns the
+    /// named variant, not `Other(v)`. Use values `>= 0x10` for custom types
+    /// to avoid aliasing.
     Other(u8),
 }
 
@@ -92,11 +100,16 @@ impl FrameHeader {
     /// Serialise the header into `buf` (appends exactly [`FRAME_HEADER_SIZE`] bytes).
     #[inline]
     pub fn write_to(&self, buf: &mut Vec<u8>) {
-        buf.push(self.version);
-        buf.push(self.reserved);
-        buf.push(self.msg_type.to_u8());
-        buf.extend_from_slice(&self.sequence.to_le_bytes());
-        buf.extend_from_slice(&self.payload_len.to_le_bytes());
+        let seq = self.sequence.to_le_bytes();
+        let plen = self.payload_len.to_le_bytes();
+        let header: [u8; FRAME_HEADER_SIZE] = [
+            self.version,
+            self.reserved,
+            self.msg_type.to_u8(),
+            seq[0], seq[1], seq[2], seq[3],
+            plen[0], plen[1], plen[2], plen[3],
+        ];
+        buf.extend_from_slice(&header);
     }
 
     /// Attempt to parse a header from the first 11 bytes of `data`.
@@ -108,6 +121,9 @@ impl FrameHeader {
             return None;
         }
         let version = data[0];
+        if version != PROTOCOL_VERSION {
+            return None;
+        }
         let reserved = data[1];
         let msg_type = MsgType::from_u8(data[2]);
         let sequence = u32::from_le_bytes([data[3], data[4], data[5], data[6]]);
@@ -130,6 +146,13 @@ impl FrameHeader {
 #[inline]
 #[must_use]
 pub fn frame_pack(header: &FrameHeader, payload: &[u8]) -> Vec<u8> {
+    assert_eq!(
+        header.payload_len as usize,
+        payload.len(),
+        "frame_pack: header.payload_len ({}) != payload.len() ({})",
+        header.payload_len,
+        payload.len(),
+    );
     let mut buf = Vec::with_capacity(FRAME_HEADER_SIZE + payload.len());
     header.write_to(&mut buf);
     buf.extend_from_slice(payload);
@@ -144,7 +167,7 @@ pub fn frame_pack(header: &FrameHeader, payload: &[u8]) -> Vec<u8> {
 #[must_use]
 pub fn frame_unpack(data: &[u8]) -> Option<(FrameHeader, &[u8])> {
     let header = FrameHeader::read_from(data)?;
-    let payload_end = FRAME_HEADER_SIZE + header.payload_len as usize;
+    let payload_end = FRAME_HEADER_SIZE.checked_add(header.payload_len as usize)?;
     if data.len() < payload_end {
         return None;
     }
@@ -255,10 +278,11 @@ impl Decode for Vec<u8> {
             return None;
         }
         let len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        let total = 4 + len;
-        if data.len() < total {
+        // Length cannot exceed remaining buffer
+        if len > data.len() - 4 {
             return None;
         }
+        let total = 4 + len;
         Some((data[4..total].to_vec(), total))
     }
 }
@@ -287,10 +311,11 @@ impl Decode for String {
             return None;
         }
         let len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        let total = 4 + len;
-        if data.len() < total {
+        // Length cannot exceed remaining buffer
+        if len > data.len() - 4 {
             return None;
         }
+        let total = 4 + len;
         let s = std::str::from_utf8(&data[4..total]).ok()?;
         Some((s.to_owned(), total))
     }

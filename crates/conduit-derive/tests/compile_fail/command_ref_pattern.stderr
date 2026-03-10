@@ -1,0 +1,5 @@
+error: #[command] does not support `ref` parameter bindings
+ --> tests/compile_fail/command_ref_pattern.rs:4:16
+  |
+4 | fn ref_handler(ref name: String) -> Vec<u8> {
+  |                ^^^^^^^^

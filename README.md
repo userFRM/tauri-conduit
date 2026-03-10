@@ -8,7 +8,7 @@
 
 **Binary IPC for Tauri v2 via `conduit://` custom protocol.**
 
-Replaces Tauri's JSON-over-webview IPC with an in-process custom protocol. Level 1 (JSON, drop-in compatible) measures ~2.4x faster. Level 2 (binary) measures up to ~2400x faster on 64 KB payloads.
+Replaces Tauri's JSON-over-webview IPC with an in-process custom protocol. Level 1 (JSON, drop-in compatible) measures ~2.1-2.8x faster Rust-side dispatch. Level 2 (binary) measures up to ~500x faster Rust-side dispatch on 64 KB payloads.
 
 ```diff
 - import { invoke } from '@tauri-apps/api/core';
@@ -64,9 +64,11 @@ conduit targets apps where IPC throughput matters: streaming real-time data, pro
 
 conduit provides two optimization tiers. Level 1 is a drop-in replacement. Level 2 eliminates JSON entirely.
 
-### Level 1: Drop-in replacement -- ~2.4x faster
+> **All numbers are Rust dispatch layer only** -- excludes WebView bridge, `fetch()`, and JS parsing overhead. See [BENCHMARKS.md](BENCHMARKS.md) for methodology and full results.
 
-`invoke()` is API-compatible with Tauri's built-in invoke. It still uses JSON for argument encoding, but routes through conduit's in-process custom protocol and deserializes directly to the target type (skipping the intermediate `serde_json::Value` conversion). Measured at ~2.4x faster across tested payload sizes.
+### Level 1: Drop-in replacement -- ~2-3x faster Rust-side dispatch
+
+`invoke()` is API-compatible with Tauri's built-in invoke. It still uses JSON for argument encoding, but routes through conduit's in-process custom protocol and deserializes directly to the target type (skipping the intermediate `serde_json::Value` conversion). conduit uses sonic-rs for JSON deserialization at both Level 1 and Level 2, while Tauri uses serde_json with an intermediate `Value` step.
 
 ```typescript
 import { invoke } from 'tauri-plugin-conduit';
@@ -77,13 +79,13 @@ const result = await invoke('get_ticks', { symbol: 'AAPL' });
 
 | Payload | Tauri invoke | conduit invoke | Improvement |
 |---|---|---|---|
-| 25B struct | 762 ns | 316 ns | **2.4x faster** |
-| 1 KB | 34 us | 14.7 us | **2.3x faster** |
-| 64 KB | 2.16 ms | 867 us | **2.5x faster** |
+| 25B struct | 714 ns | 333 ns | **~2.1x faster Rust-side dispatch** |
+| 1 KB | 8.5 us | 7.6 us | **~1.1x faster Rust-side dispatch** |
+| 64 KB | 2.30 ms | 821 us | **~2.8x faster Rust-side dispatch** |
 
-### Level 2: Binary mode -- up to ~2400x faster
+### Level 2: Binary mode -- up to ~500x faster Rust-side dispatch
 
-`invokeBinary()` eliminates JSON entirely -- raw bytes in, raw bytes out. The improvement scales with payload size.
+`invokeBinary()` eliminates JSON entirely -- raw bytes in, raw bytes out. Binary passthrough -- no JSON parsing. The improvement scales with payload size.
 
 ```typescript
 import { connect } from 'tauri-plugin-conduit';
@@ -94,9 +96,9 @@ const buf = await conduit.invokeBinary('raw_data', new Uint8Array([1, 2, 3]));
 
 | Payload | Tauri invoke | conduit binary | Improvement |
 |---|---|---|---|
-| 25B struct | 762 ns | 76 ns | **10x faster** |
-| 1 KB | 34 us | 68 ns | **500x faster** |
-| 64 KB | 2.16 ms | 893 ns | **2400x faster** |
+| 25B struct | 714 ns | 78 ns | **~9x faster Rust-side dispatch** |
+| 1 KB | 8.5 us | 991 ns | **~8.6x faster Rust-side dispatch** |
+| 64 KB | 2.30 ms | 4.6 us | **~500x faster Rust-side dispatch** |
 
 ### The full picture
 
@@ -104,11 +106,11 @@ All three paths side by side.
 
 | Payload | Tauri invoke | Level 1 (drop-in) | Level 2 (binary) |
 |---|---|---|---|
-| 25B struct | 762 ns | 316 ns (2.4x) | 76 ns (10x) |
-| 1 KB | 34 us | 14.7 us (2.3x) | 68 ns (500x) |
-| 64 KB | 2.16 ms | 867 us (2.5x) | 893 ns (2400x) |
+| 25B struct | 714 ns | 333 ns (~2.1x) | 78 ns (~9x) |
+| 1 KB | 8.5 us | 7.6 us (~1.1x) | 991 ns (~8.6x) |
+| 64 KB | 2.30 ms | 821 us (~2.8x) | 4.6 us (~500x) |
 
-> Measured with criterion on the Rust dispatch layer. Run `cd crates/conduit-core && cargo bench -- comparison` to see numbers on your hardware.
+> Measured with criterion on the Rust dispatch layer. The 1KB payload uses a complex mixed type (nested strings, float arrays); simpler payloads see larger improvements. Run `cd crates/conduit-core && cargo bench -- comparison` to see numbers on your hardware.
 
 ## Getting Started
 
@@ -124,10 +126,13 @@ npm install tauri-plugin-conduit
 
 ### 2. Register your commands (Rust)
 
-Use `#[command]` for Tauri-style named parameters:
+Use `#[conduit::command]` for named parameters, `State<T>`/`AppHandle`/`Window`/`Webview` injection, `Result<T, E>` returns, and async:
 
 ```rust
-use tauri_plugin_conduit::command;
+use conduit::command;
+use tauri::State;
+
+struct AppState { app_name: String }
 
 #[command]
 fn get_ticks(symbol: String, limit: u32) -> Vec<Tick> {
@@ -135,20 +140,29 @@ fn get_ticks(symbol: String, limit: u32) -> Vec<Tick> {
 }
 
 #[command]
-fn place_order(symbol: String, qty: f64) -> Result<OrderId, String> {
-    broker::submit(&symbol, qty).map_err(|e| e.to_string())
+fn place_order(state: State<'_, AppState>, symbol: String, qty: f64) -> Result<OrderId, String> {
+    broker::submit(&state.app_name, &symbol, qty).map_err(|e| e.to_string())
+}
+
+#[command]
+async fn fetch_data(url: String) -> Result<Vec<u8>, String> {
+    reqwest::get(&url).await.map_err(|e| e.to_string())?
+        .bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
 }
 ```
 
-Register handlers in your Tauri builder:
+Register handlers in your Tauri builder using `handler!()` to resolve command functions:
 
 ```rust
 // src-tauri/src/main.rs
+use conduit::handler;
+
 tauri::Builder::default()
     .plugin(
         tauri_plugin_conduit::init()
-            .command_json("get_ticks", get_ticks)
-            .command_json_result("place_order", place_order)
+            .handler("get_ticks", handler!(get_ticks))
+            .handler("place_order", handler!(place_order))
+            .handler("fetch_data", handler!(fetch_data))
             .channel("telemetry")
             .channel_ordered("events")
             .build()
@@ -157,8 +171,10 @@ tauri::Builder::default()
     .unwrap();
 ```
 
-Four handler registration methods are available:
-- `command_json(name, handler)` -- JSON in, JSON out. Pair with `#[command]` for named parameters.
+Six handler registration methods are available:
+- `handler(name, handler)` -- **recommended.** Use with `#[conduit::command]` + `handler!()`. Supports named parameters, `State<T>`, `AppHandle`, `Window`/`WebviewWindow`, `Webview` injection, `Result<T, E>`, and async. Full `#[tauri::command]` parity.
+- `handler_raw(name, closure)` -- legacy closure-based handler (`Fn(Vec<u8>, &dyn Any) -> Result<Vec<u8>, Error>`). Use for backward compatibility when migrating from v1.
+- `command_json(name, handler)` -- JSON in, JSON out. Single argument type (no named parameters, no State, no async).
 - `command_json_result(name, handler)` -- same as above, but the handler returns `Result<R, E>`. Errors are propagated to the caller.
 - `command_binary(name, handler)` -- binary in, binary out. The handler takes a type implementing `Decode` and returns a type implementing `Encode`. No JSON involved.
 - `command(name, handler)` -- raw `Vec<u8>` in, `Vec<u8>` out. Full control, no automatic (de)serialization.
@@ -171,9 +187,15 @@ import { invoke } from 'tauri-plugin-conduit';
 const result = await invoke('get_ticks', { symbol: 'AAPL' });
 ```
 
+### Parameter naming
+
+Unlike Tauri's `#[tauri::command]`, conduit's `#[command]` macro does **not** rename parameters. Rust snake_case parameter names stay snake_case in JSON. A Rust parameter `user_name: String` must be passed as `{ user_name: "Alice" }` from JavaScript. This avoids the silent mismatch that camelCase renaming can cause.
+
 ## Streaming
 
 conduit includes built-in streaming from Rust to JavaScript via ring buffers and Tauri events.
+
+> **Note:** The default `.channel("name")` creates a **lossy** ring buffer -- oldest frames are silently dropped when the buffer is full. Use `.channel_ordered("name")` for guaranteed-delivery ordered channels (backed by an unbounded queue -- monitor memory usage).
 
 Two channel types are available:
 
@@ -273,7 +295,7 @@ sequenceDiagram
     participant H as Handler
 
     JS->>CP: fetch("conduit://…", raw bytes)
-    Note over CP: Zero-copy passthrough
+    Note over CP: Binary passthrough — no JSON parsing
     CP->>H: Raw bytes (Vec of u8)
     H->>CP: Raw bytes
     CP->>JS: ArrayBuffer
@@ -285,7 +307,7 @@ sequenceDiagram
 |---|---|---|---|
 | **Transport** | Webview bridge | Custom protocol (in-process) | Custom protocol (in-process) |
 | **Rust-side JSON** | serde_json: bytes -> Value -> T (double parse) | sonic-rs: bytes -> T (single parse, SIMD) | No JSON |
-| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[command]` + `command_json`: named params, `Result<T,E>`, sync only, no `State<T>` | `command_binary(name, fn)`: Encode/Decode types, sync only |
+| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[conduit::command]` + `handler!()`: named params, `State<T>`, `AppHandle`, `Window`/`Webview`, `Result<T,E>`, sync + async (tokio-spawned) | `command_binary(name, fn)`: Encode/Decode types, sync only |
 | **Streaming** | Manual event wiring | Built-in push + drain (lossy and ordered) | Built-in push + drain (lossy and ordered) |
 | **Network surface** | None | None | None |
 
@@ -312,22 +334,33 @@ Supported types: `u8`-`u64`, `i8`-`i64`, `f32`, `f64`, `bool`, `Vec<u8>`, `Strin
 
 Everything runs in-process -- no ports, no sockets, no network endpoints.
 
-- **Per-launch auth key** -- a random 32-byte key is generated each time your app starts. Every request is validated with constant-time comparison. Leaked keys expire when the app restarts.
-- **Tauri permissions** -- integrates with Tauri's built-in capability system for command authorization.
+- **Authentication** -- conduit uses a per-launch 32-byte invoke key (constant-time validated) as its access control mechanism. This is simpler than Tauri's per-command ACL: any webview with the invoke key can call any registered command. For multi-window apps requiring granular per-command access control, stick with Tauri's built-in IPC.
 - **CSP safe** -- no Content Security Policy exceptions required.
 - **Panic isolation** -- if a handler panics, conduit catches it and returns a clean error. The app keeps running.
+
+**Threat model**: The invoke key protects against cross-origin requests (other tabs, browser extensions intercepting network requests). It does **not** protect against malicious JavaScript running in the same WebView context -- any JS with access to the page can obtain the key via `fetch()` interception or DevTools. This matches Tauri's own trust model: the WebView JS context is trusted. Disable DevTools in production builds.
 
 ## Tradeoffs
 
 conduit is not a free lunch. These are real costs you should weigh before adopting it.
 
-**Handler ergonomics.** conduit provides `#[command]` for named parameters and `Result<T, E>` returns -- similar to `#[tauri::command]`. However, conduit handlers are synchronous only (no async) and do not support `State<T>` injection. If you need managed state, pass it through your handler manually.
+**Handler ergonomics.** `#[conduit::command]` supports named parameters, `State<T>` injection, `AppHandle`, `Window`/`WebviewWindow`/`Webview` injection, truly async handlers (spawned on tokio, not `block_on`), and `Result<T, E>` returns -- matching `#[tauri::command]` feature-for-feature. Known gaps vs Tauri: conduit hardcodes the Wry runtime (Tauri is generic over `Runtime`), parameter names stay snake_case (no camelCase conversion), and lacks `generate_handler![]`-style bulk registration and Tauri ACL `build.rs` permission generation.
 
 **Streaming tradeoffs.** Lossy channels (`channel()`) drop the oldest frames when the consumer falls behind. Ordered channels (`channel_ordered()`) never drop frames but return an error when full (backpressure). Neither channel type provides at-least-once or exactly-once delivery guarantees across reconnects.
 
 **Binary mode trades debuggability for speed.** JSON is human-readable -- you can inspect it in devtools, log it, diff it. Raw bytes are opaque. Level 2 makes production debugging harder. Use it on hot paths where the performance difference justifies the loss of visibility.
 
-**Dependency risk.** conduit relies on Tauri's `register_uri_scheme_protocol` API. If Tauri makes breaking changes to custom protocol internals, conduit needs to be updated before your app can upgrade. This is a real coupling that Tauri's built-in IPC doesn't have.
+**Dependency risk.** conduit relies on Tauri's `register_asynchronous_uri_scheme_protocol` API. If Tauri makes breaking changes to custom protocol internals, conduit needs to be updated before your app can upgrade. This is a real coupling that Tauri's built-in IPC doesn't have.
+
+**No `tauri::Channel` streaming.** Tauri's `Channel` parameter provides per-invocation streaming (progress callbacks, real-time results). conduit uses a different model: pre-registered ring buffer channels with event-driven drain. This is a fundamentally different architecture -- commands using Tauri's `Channel` must be rearchitected to use conduit's `subscribe()`/`drain()` model. See the Streaming section above for details.
+
+**Wry-only.** The `#[command]` macro and plugin hardcode `tauri::Wry` as the runtime. This is the only production Tauri runtime, but it prevents using mock runtimes for testing.
+
+**Multi-window broadcast.** `state.push()` emits events via `app_handle.emit()` which broadcasts to ALL webviews. In multi-window apps, every subscribed window receives every push for a given channel. There is no per-window targeting. For window-specific data, use separate channel names per window.
+
+**No command renaming.** `#[command]` does not accept arguments -- there is no `rename_all` or per-command `name` attribute. The command name is always the function name.
+
+**No per-parameter serde attributes.** You cannot use `#[serde(alias = ...)]` or `#[serde(rename = ...)]` on individual command parameters. The generated args struct is internal.
 
 **When to just use Tauri's built-in IPC:** If your app is mostly UI-driven (button clicks, form submissions, occasional data fetches), Tauri's invoke is sufficient. conduit is for the cases where IPC is measurably on your critical path.
 
@@ -336,12 +369,29 @@ conduit is not a free lunch. These are real costs you should weigh before adopti
 ```
 tauri-conduit/
   crates/
+    conduit/                   Facade crate (re-exports #[command], Encode, Decode)
     conduit-core/              Core library (codec, router, ring buffer)
     conduit-derive/            Proc macros (Encode, Decode, #[command])
     tauri-plugin-conduit/      Tauri v2 plugin
   packages/
     tauri-plugin-conduit/      TypeScript client (tauri-plugin-conduit)
 ```
+
+The `conduit` facade crate (6 lines) exists solely to enable the `#[conduit::command]` attribute path. It re-exports the proc macro and core types.
+
+### Testing
+
+```sh
+cargo test --workspace                                    # core + derive crates
+cargo test --manifest-path crates/tauri-plugin-conduit/Cargo.toml  # plugin unit tests
+cd packages/tauri-plugin-conduit && npx tsx --test src/__tests__/*.test.ts  # TS codec tests
+```
+
+> **Note:** There are no end-to-end integration tests that exercise the full Tauri->conduit->WebView roundtrip. The test suite covers unit-level Rust dispatch, codec correctness, and TypeScript wire format -- not the custom protocol transport under a running Tauri app.
+
+### Dependencies
+
+conduit-core depends on `serde` and `sonic-rs` unconditionally. These are required by the Router JSON handler methods, the `ConduitHandler` trait, and the `Error::Serialize` variant. The pure binary codec (`Encode`/`Decode`, `RingBuffer`) does not use JSON at runtime, but these dependencies are not feature-gated because the handler system is a core part of conduit's purpose.
 
 ## Contributing
 

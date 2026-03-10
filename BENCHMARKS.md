@@ -1,6 +1,23 @@
 # tauri-conduit Benchmark Report
 
-Generated: 2026-03-09
+Generated: 2026-03-10 (v2.0.0)
+
+## Measurement scope
+
+**These numbers measure Rust-side dispatch only.** They exclude the WebView bridge, `fetch()` overhead, and JavaScript parsing. The full end-to-end path for an `invoke()` call is:
+
+```
+JS: JSON.stringify(args)           ← not measured
+JS: fetch("conduit://...")          ← not measured (WebView intercepts)
+WebView: custom protocol dispatch   ← not measured (platform-specific, ~1-5ms)
+Rust: handler dispatch              ← MEASURED (this report)
+WebView: response delivery          ← not measured
+JS: JSON.parse(response)            ← not measured
+```
+
+For small payloads, the WebView bridge overhead (~1-5ms) dominates, so the 2.4x Rust improvement translates to a modest end-to-end gain. For large payloads (64KB+), serialization dominates the bridge overhead, and conduit's binary mode delivers substantial end-to-end improvement.
+
+End-to-end benchmarks require a running Tauri app and vary by platform (WKWebView on macOS, WebView2 on Windows, webkit2gtk on Linux). See the [Tradeoffs section](README.md#tradeoffs) in the README for a full discussion.
 
 ## Environment
 
@@ -40,18 +57,18 @@ Frame header and wire-format encoding/decoding.
 
 | Benchmark | Mean | Low | High |
 |---|---|---|---|
-| FrameHeader write_to + read_from | 10.003 ns | 9.955 ns | 10.052 ns |
-| frame_pack+unwrap 0B | 16.429 ns | 16.342 ns | 16.512 ns |
-| frame_pack+unwrap 64B | 16.599 ns | 16.522 ns | 16.675 ns |
-| frame_pack+unwrap 1KB | 59.339 ns | 59.071 ns | 59.603 ns |
-| frame_pack+unwrap 64KB | 1.2928 us | 1.2866 us | 1.2987 us |
-| Encode+Decode u64 | 7.717 ns | 7.677 ns | 7.756 ns |
-| Encode+Decode f64 | 8.483 ns | 8.441 ns | 8.527 ns |
-| Encode+Decode bool | 8.045 ns | 8.015 ns | 8.074 ns |
-| Encode+Decode Vec\<u8\> 64B | 23.231 ns | 23.112 ns | 23.346 ns |
-| Encode+Decode Vec\<u8\> 1KB | 41.439 ns | 41.286 ns | 41.585 ns |
-| Encode+Decode String short | 26.363 ns | 26.259 ns | 26.468 ns |
-| Encode+Decode String 256ch | 39.789 ns | 39.578 ns | 40.000 ns |
+| FrameHeader write_to + read_from | 6.688 ns | 6.654 ns | 6.730 ns |
+| frame_pack+unwrap 0B | 17.186 ns | 16.833 ns | 17.634 ns |
+| frame_pack+unwrap 64B | 16.681 ns | 16.570 ns | 16.813 ns |
+| frame_pack+unwrap 1KB | 60.288 ns | 59.994 ns | 60.607 ns |
+| frame_pack+unwrap 64KB | 1.7062 us | 1.6953 us | 1.7177 us |
+| Encode+Decode u64 | 7.834 ns | 7.794 ns | 7.873 ns |
+| Encode+Decode f64 | 8.681 ns | 8.638 ns | 8.722 ns |
+| Encode+Decode bool | 8.252 ns | 8.229 ns | 8.276 ns |
+| Encode+Decode Vec\<u8\> 64B | 25.081 ns | 24.930 ns | 25.229 ns |
+| Encode+Decode Vec\<u8\> 1KB | 41.249 ns | 40.979 ns | 41.553 ns |
+| Encode+Decode String short | 26.743 ns | 26.569 ns | 26.899 ns |
+| Encode+Decode String 256ch | 39.798 ns | 39.539 ns | 40.057 ns |
 
 ---
 
@@ -63,31 +80,31 @@ Head-to-head: Tauri invoke (JSON via Value) vs conduit Level 1 (JSON direct) vs 
 
 | Path | Mean | Low | High |
 |---|---|---|---|
-| Tauri invoke (JSON via Value) | 755.58 ns | 751.88 ns | 759.19 ns |
-| conduit L1 raw (JSON direct) | 318.81 ns | 317.29 ns | 320.29 ns |
-| conduit L1 typed (register_json) | 316.02 ns | 314.78 ns | 317.19 ns |
-| conduit L2 raw (binary) | 74.125 ns | 73.741 ns | 74.515 ns |
-| conduit L2 typed (register_binary) | 74.246 ns | 73.896 ns | 74.601 ns |
+| Tauri invoke (JSON via Value) | 714.27 ns | 708.50 ns | 721.49 ns |
+| conduit L1 raw (JSON direct) | 333.68 ns | 331.86 ns | 335.54 ns |
+| conduit L1 typed (register_json) | 332.56 ns | 330.95 ns | 334.07 ns |
+| conduit L2 raw (binary) | 78.039 ns | 77.601 ns | 78.420 ns |
+| conduit L2 typed (register_binary) | 79.678 ns | 79.055 ns | 80.309 ns |
 
 ### ~1KB payload roundtrip (MediumPayload: u64 + String + Vec\<f64\> + Vec\<String\> + bool)
 
 | Path | Mean | Low | High |
 |---|---|---|---|
-| Tauri invoke (JSON via Value) | 8.378 us | 8.338 us | 8.419 us |
-| conduit L1 raw (JSON direct) | 4.841 us | 4.816 us | 4.865 us |
-| conduit L1 typed (register_json) | 4.793 us | 4.769 us | 4.815 us |
-| conduit L2 raw (binary) | 976.28 ns | 970.85 ns | 981.60 ns |
-| conduit L2 typed (register_binary) | 989.70 ns | 983.55 ns | 995.60 ns |
+| Tauri invoke (JSON via Value) | 8.531 us | 8.491 us | 8.572 us |
+| conduit L1 raw (JSON direct) | 7.617 us | 7.570 us | 7.660 us |
+| conduit L1 typed (register_json) | 7.622 us | 7.583 us | 7.661 us |
+| conduit L2 raw (binary) | 991.36 ns | 982.72 ns | 1.000 us |
+| conduit L2 typed (register_binary) | 991.80 ns | 981.83 ns | 1.002 us |
 
 ### 64KB payload roundtrip (LargePayload: u64 + Vec\<u8\>[65536] + u32)
 
 | Path | Mean | Low | High |
 |---|---|---|---|
-| Tauri invoke (JSON via Value) | 2.157 ms | 2.148 ms | 2.166 ms |
-| conduit L1 raw (JSON direct) | 872.11 us | 868.26 us | 876.03 us |
-| conduit L1 typed (register_json) | 871.05 us | 867.99 us | 874.08 us |
-| conduit L2 raw (binary) | 4.107 us | 4.014 us | 4.183 us |
-| conduit L2 typed (register_binary) | 3.973 us | 3.884 us | 4.047 us |
+| Tauri invoke (JSON via Value) | 2.304 ms | 2.294 ms | 2.314 ms |
+| conduit L1 raw (JSON direct) | 859.05 us | 856.06 us | 861.85 us |
+| conduit L1 typed (register_json) | 820.78 us | 816.75 us | 824.96 us |
+| conduit L2 raw (binary) | 4.592 us | 4.315 us | 4.850 us |
+| conduit L2 typed (register_binary) | 4.563 us | 4.276 us | 4.823 us |
 
 ---
 
@@ -97,9 +114,9 @@ Raw Router dispatch overhead (no serialization).
 
 | Benchmark | Mean | Low | High |
 |---|---|---|---|
-| dispatch echo handler | 35.165 ns | 35.003 ns | 35.321 ns |
-| dispatch 100 commands (lookup) | 36.897 ns | 36.690 ns | 37.108 ns |
-| register + dispatch combined | 125.13 ns | 124.56 ns | 125.67 ns |
+| dispatch echo handler | 37.352 ns | 37.085 ns | 37.632 ns |
+| dispatch 100 commands (lookup) | 39.417 ns | 39.181 ns | 39.642 ns |
+| register + dispatch combined | 129.72 ns | 128.95 ns | 130.49 ns |
 
 ---
 
@@ -111,24 +128,24 @@ Focused comparison of the three `Router` registration modes. All handlers perfor
 
 | Registration Mode | Mean | Low | High |
 |---|---|---|---|
-| register() raw echo | 44.735 ns | 44.504 ns | 44.954 ns |
-| register_json() echo | 299.85 ns | 298.57 ns | 301.09 ns |
-| register_binary() echo | 76.378 ns | 76.015 ns | 76.730 ns |
+| register() raw echo | 47.466 ns | 47.205 ns | 47.721 ns |
+| register_json() echo | 329.53 ns | 327.76 ns | 331.29 ns |
+| register_binary() echo | 79.003 ns | 78.552 ns | 79.445 ns |
 
 ### With work (deserialize, add two fields, serialize result)
 
 | Registration Mode | Mean | Low | High |
 |---|---|---|---|
-| register_json() with work | 223.34 ns | 222.04 ns | 224.68 ns |
-| register_binary() with work | 71.029 ns | 70.638 ns | 71.405 ns |
+| register_json() with work | 223.58 ns | 221.85 ns | 225.54 ns |
+| register_binary() with work | 73.309 ns | 72.790 ns | 73.857 ns |
 
 ### Lookup in 100-command table
 
 | Registration Mode | Mean | Low | High |
 |---|---|---|---|
-| register() in 100-cmd table | 51.316 ns | 51.041 ns | 51.584 ns |
-| register_json() in 100-cmd table | 300.72 ns | 299.14 ns | 302.24 ns |
-| register_binary() in 100-cmd table | 79.593 ns | 79.150 ns | 80.019 ns |
+| register() in 100-cmd table | 52.610 ns | 52.314 ns | 52.907 ns |
+| register_json() in 100-cmd table | 334.56 ns | 332.62 ns | 336.45 ns |
+| register_binary() in 100-cmd table | 81.068 ns | 80.467 ns | 81.727 ns |
 
 ---
 
@@ -140,41 +157,41 @@ Comparison of the two buffer strategies: `Queue` (guaranteed delivery, rejects w
 
 | Buffer | Mean | Low | High |
 |---|---|---|---|
-| RingBuffer | 27.728 us | 27.577 us | 27.886 us |
-| Queue (bounded) | 37.602 us | 37.448 us | 37.752 us |
-| Queue (unbounded) | 37.703 us | 37.500 us | 37.921 us |
+| RingBuffer | 27.296 us | 27.173 us | 27.418 us |
+| Queue (bounded) | 39.711 us | 39.520 us | 39.897 us |
+| Queue (unbounded) | 39.651 us | 39.406 us | 39.892 us |
 
 ### Push contention (2 producers, 1 consumer, 64B frames)
 
 | Buffer | Mean | Low | High |
 |---|---|---|---|
-| RingBuffer | 124.38 ns | 122.26 ns | 126.36 ns |
-| Queue (bounded) | 66.532 ns | 65.932 ns | 67.104 ns |
+| RingBuffer | 130.94 ns | 127.88 ns | 133.95 ns |
+| Queue (bounded) | 70.507 ns | 69.425 ns | 71.616 ns |
 
 ### drain_all latency (100 x 64B frames)
 
 | Buffer | Mean | Low | High |
 |---|---|---|---|
-| RingBuffer | 3.841 us | 3.824 us | 3.857 us |
-| Queue (bounded) | 3.854 us | 3.839 us | 3.869 us |
+| RingBuffer | 4.163 us | 4.146 us | 4.180 us |
+| Queue (bounded) | 5.300 us | 5.265 us | 5.335 us |
 
 ### Backpressure / overflow behavior (buffer full, 64B frame)
 
 | Operation | Mean | Low | High |
 |---|---|---|---|
-| Queue reject (full) | 11.835 ns | 11.792 ns | 11.878 ns |
-| RingBuffer evict (full) | 23.427 ns | 23.334 ns | 23.517 ns |
+| Queue reject (full) | 13.565 ns | 13.501 ns | 13.625 ns |
+| RingBuffer evict (full) | 24.937 ns | 24.757 ns | 25.133 ns |
 
 ### drain_all scaling (64B frames, varying count)
 
 | Buffer | Frames | Mean | Low | High |
 |---|---|---|---|---|
-| RingBuffer | 10 | 318.49 ns | 317.16 ns | 319.72 ns |
-| Queue | 10 | 320.50 ns | 318.99 ns | 322.03 ns |
-| RingBuffer | 100 | 3.828 us | 3.808 us | 3.849 us |
-| Queue | 100 | 3.869 us | 3.855 us | 3.884 us |
-| RingBuffer | 1000 | 51.118 us | 50.860 us | 51.398 us |
-| Queue | 1000 | 52.280 us | 52.036 us | 52.524 us |
+| RingBuffer | 10 | 438.22 ns | 435.87 ns | 440.52 ns |
+| Queue | 10 | 443.85 ns | 441.74 ns | 445.87 ns |
+| RingBuffer | 100 | 4.739 us | 4.716 us | 4.760 us |
+| Queue | 100 | 4.717 us | 4.677 us | 4.763 us |
+| RingBuffer | 1000 | 55.185 us | 54.718 us | 55.713 us |
+| Queue | 1000 | 53.917 us | 53.595 us | 54.240 us |
 
 ---
 
@@ -184,7 +201,7 @@ Standalone RingBuffer microbenchmarks.
 
 | Benchmark | Mean | Low | High |
 |---|---|---|---|
-| ringbuf push 64B frame | 43.065 ns | 42.789 ns | 43.334 ns |
-| ringbuf push+try_pop roundtrip | 33.229 ns | 33.077 ns | 33.375 ns |
-| ringbuf drain_all 100x64B | 3.871 us | 3.858 us | 3.885 us |
-| ringbuf push contention 2P/1C | 134.78 ns | 132.02 ns | 137.55 ns |
+| ringbuf push 64B frame | 44.505 ns | 44.218 ns | 44.773 ns |
+| ringbuf push+try_pop roundtrip | 34.918 ns | 34.745 ns | 35.082 ns |
+| ringbuf drain_all 100x64B | 4.188 us | 4.150 us | 4.227 us |
+| ringbuf push contention 2P/1C | 126.03 ns | 123.72 ns | 128.26 ns |

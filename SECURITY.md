@@ -23,11 +23,13 @@ tauri-conduit runs entirely in-process within a Tauri v2 application. There is n
 
 - **Per-launch invoke key:** 32 random bytes (via `getrandom`), hex-encoded, validated with constant-time comparison (`subtle` crate) on every custom protocol request.
 - **No network surface:** All communication runs in the same address space via Tauri's custom protocol handler. No ports, no sockets, no endpoints.
-- **Capability-based ACL:** Integrates with Tauri's permission system.
+- **Flat invoke key (no per-command ACL):** Any webview with the invoke key can call any registered command. This is simpler than Tauri's per-command capability system. For granular access control, use Tauri's built-in IPC.
 - **CSP compliance:** Custom protocol handler does not require Content Security Policy exceptions.
 
 ## Supported Versions
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Yes       |
+| 2.0.x   | Yes       |
+| 1.0.x   | Security fixes only |
+| 0.1.x   | No        |

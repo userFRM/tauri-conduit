@@ -21,14 +21,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use crate::Error;
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Per-frame overhead: 4 bytes for the u32 LE length prefix (matches
-/// [`crate::ringbuf`]).
-const FRAME_OVERHEAD: usize = 4;
+use crate::codec::DRAIN_FRAME_OVERHEAD;
 
 // ---------------------------------------------------------------------------
 // Inner
@@ -38,7 +31,7 @@ const FRAME_OVERHEAD: usize = 4;
 struct QueueInner {
     /// Buffered frames in FIFO order.
     frames: VecDeque<Vec<u8>>,
-    /// Total bytes used: sum of (FRAME_OVERHEAD + frame.len()) for each frame.
+    /// Total bytes used: sum of (DRAIN_FRAME_OVERHEAD + frame.len()) for each frame.
     bytes_used: usize,
     /// Maximum byte budget. `0` means unbounded.
     max_bytes: usize,
@@ -57,7 +50,7 @@ impl QueueInner {
     /// Cost of storing a single frame (length prefix + payload).
     #[inline]
     fn frame_cost(frame: &[u8]) -> usize {
-        FRAME_OVERHEAD + frame.len()
+        DRAIN_FRAME_OVERHEAD + frame.len()
     }
 }
 
@@ -84,6 +77,15 @@ impl Queue {
     ///
     /// A `max_bytes` of `0` means unbounded — pushes will never fail due to
     /// capacity.
+    ///
+    /// # Warning
+    ///
+    /// When `max_bytes` is `0` the queue has **no memory limit**. If the
+    /// producer pushes data faster than the consumer drains it, memory usage
+    /// will grow without bound, eventually causing an out-of-memory (OOM)
+    /// condition. Prefer a non-zero byte limit for production use and reserve
+    /// `0` (or [`Queue::unbounded`]) for cases where unbounded growth is
+    /// explicitly acceptable.
     pub fn new(max_bytes: usize) -> Self {
         Self {
             inner: Mutex::new(QueueInner::new(max_bytes)),
@@ -93,6 +95,12 @@ impl Queue {
     /// Create an unbounded queue.
     ///
     /// Equivalent to `Queue::new(0)`.
+    ///
+    /// # Warning
+    ///
+    /// An unbounded queue has no memory limit. If the consumer cannot keep up
+    /// with the producer, memory usage will grow without bound. Prefer
+    /// [`Queue::new`] with a reasonable byte limit for production use.
     pub fn unbounded() -> Self {
         Self::new(0)
     }
@@ -105,14 +113,14 @@ impl Queue {
     /// `max_bytes` is `0` (unbounded), pushes always succeed.
     pub fn push(&self, frame: &[u8]) -> Result<(), Error> {
         let cost = QueueInner::frame_cost(frame);
-        let mut inner = self.inner.lock().expect("queue lock poisoned");
+        let mut inner = crate::lock_or_recover(&self.inner);
 
         if inner.max_bytes > 0 && inner.bytes_used + cost > inner.max_bytes {
             return Err(Error::ChannelFull);
         }
 
         inner.frames.push_back(frame.to_vec());
-        inner.bytes_used += cost;
+        inner.bytes_used = inner.bytes_used.saturating_add(cost);
         Ok(())
     }
 
@@ -121,7 +129,7 @@ impl Queue {
     /// Returns `None` if the queue is empty.
     #[must_use]
     pub fn try_pop(&self) -> Option<Vec<u8>> {
-        let mut inner = self.inner.lock().expect("queue lock poisoned");
+        let mut inner = crate::lock_or_recover(&self.inner);
         let frame = inner.frames.pop_front()?;
         inner.bytes_used -= QueueInner::frame_cost(&frame);
         Some(frame)
@@ -141,30 +149,31 @@ impl Queue {
     /// Returns an empty `Vec` if the queue is empty.
     #[must_use]
     pub fn drain_all(&self) -> Vec<u8> {
-        let mut inner = self.inner.lock().expect("queue lock poisoned");
-
-        if inner.frames.is_empty() {
-            return Vec::new();
-        }
-
-        // Pre-calculate output size: 4 (count) + sum of (4 + len) per frame.
-        let output_size = 4 + inner.bytes_used;
+        // Swap the frames out under the lock, then serialize without contention.
+        let (mut frames, bytes_used) = {
+            let mut inner = crate::lock_or_recover(&self.inner);
+            if inner.frames.is_empty() {
+                return Vec::new();
+            }
+            let frames = std::mem::take(&mut inner.frames);
+            let bytes_used = inner.bytes_used;
+            inner.bytes_used = 0;
+            (frames, bytes_used)
+        };
+        // Lock released — serialize without holding the mutex.
+        let output_size = 4usize.saturating_add(bytes_used);
         let mut buf = Vec::with_capacity(output_size);
 
         // Frame count header.
-        let count = inner.frames.len() as u32;
+        let count = frames.len() as u32;
         buf.extend_from_slice(&count.to_le_bytes());
 
         // Each frame: [u32 LE len][bytes].
-        for frame in &inner.frames {
+        for frame in frames.make_contiguous() {
             let len = frame.len() as u32;
             buf.extend_from_slice(&len.to_le_bytes());
             buf.extend_from_slice(frame);
         }
-
-        // Reset.
-        inner.frames.clear();
-        inner.bytes_used = 0;
 
         buf
     }
@@ -172,24 +181,24 @@ impl Queue {
     /// Number of frames currently queued.
     #[must_use]
     pub fn frame_count(&self) -> usize {
-        self.inner.lock().expect("queue lock poisoned").frames.len()
+        crate::lock_or_recover(&self.inner).frames.len()
     }
 
     /// Number of bytes currently used (including per-frame length prefixes).
     #[must_use]
     pub fn bytes_used(&self) -> usize {
-        self.inner.lock().expect("queue lock poisoned").bytes_used
+        crate::lock_or_recover(&self.inner).bytes_used
     }
 
     /// Maximum byte budget (`0` means unbounded).
     #[must_use]
     pub fn max_bytes(&self) -> usize {
-        self.inner.lock().expect("queue lock poisoned").max_bytes
+        crate::lock_or_recover(&self.inner).max_bytes
     }
 
     /// Clear all queued frames.
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().expect("queue lock poisoned");
+        let mut inner = crate::lock_or_recover(&self.inner);
         inner.frames.clear();
         inner.bytes_used = 0;
     }
@@ -197,7 +206,7 @@ impl Queue {
 
 impl std::fmt::Debug for Queue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.inner.lock().expect("queue lock poisoned");
+        let inner = crate::lock_or_recover(&self.inner);
         f.debug_struct("Queue")
             .field("frame_count", &inner.frames.len())
             .field("bytes_used", &inner.bytes_used)

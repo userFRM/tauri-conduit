@@ -23,6 +23,8 @@ pub enum Error {
     ChannelFull,
     /// A command handler returned an application-level error.
     Handler(String),
+    /// A named channel does not exist.
+    UnknownChannel(String),
 }
 
 impl fmt::Display for Error {
@@ -37,6 +39,7 @@ impl fmt::Display for Error {
             }
             Self::ChannelFull => f.write_str("channel full: byte limit reached"),
             Self::Handler(msg) => write!(f, "handler error: {msg}"),
+            Self::UnknownChannel(name) => write!(f, "unknown channel: {name}"),
         }
     }
 }
@@ -121,5 +124,16 @@ mod tests {
     #[test]
     fn error_source_handler() {
         assert!(std::error::Error::source(&Error::Handler("x".into())).is_none());
+    }
+
+    #[test]
+    fn display_unknown_channel() {
+        let err = Error::UnknownChannel("telemetry".into());
+        assert_eq!(err.to_string(), "unknown channel: telemetry");
+    }
+
+    #[test]
+    fn error_source_unknown_channel() {
+        assert!(std::error::Error::source(&Error::UnknownChannel("x".into())).is_none());
     }
 }

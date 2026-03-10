@@ -1,0 +1,5 @@
+error: Encode / Decode cannot be derived for generic structs
+ --> tests/compile_fail/derive_generic_struct.rs:4:15
+  |
+4 | struct Generic<T> {
+  |               ^^^

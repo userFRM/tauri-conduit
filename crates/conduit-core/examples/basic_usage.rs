@@ -162,9 +162,9 @@ fn main() {
         };
 
         let tick_frame = frame_pack(&tick_header, &tick_payload);
-        let dropped = ring.push(&tick_frame);
+        let outcome = ring.push(&tick_frame);
         println!(
-            "  Pushed tick {i}: {} bytes, dropped={dropped}",
+            "  Pushed tick {i}: {} bytes, outcome={outcome:?}",
             tick_frame.len()
         );
     }

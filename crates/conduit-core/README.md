@@ -7,7 +7,7 @@
 
 Binary IPC core for Tauri v2: codec, router, ring buffer, and ordered queue.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v1.0.0).
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.0.0).
 
 ## Features
 
@@ -24,10 +24,14 @@ Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace 
 | `Router` | Named synchronous command registry (`register`, `register_json`, `register_binary`, `call`) |
 | `RingBuffer` | Thread-safe lossy circular buffer — oldest frames dropped on overflow |
 | `Queue` | Thread-safe ordered buffer — backpressure when full, no data loss |
-| `ChannelBuffer` | Enum wrapping `RingBuffer` or `Queue` with a unified push/drain API |
+| `ChannelBuffer` | Enum wrapping `RingBuffer` (Lossy) or `Queue` (Reliable) with a unified push/drain API |
+| `ConduitHandler` | Trait for sync/async command handlers, implemented by `#[command]`-generated structs |
+| `HandlerResponse` | Enum: `Sync(Result<Vec<u8>, Error>)` or `Async(Pin<Box<dyn Future>>)` |
+| `HandlerContext` | Context passed to handlers: app handle + optional webview label |
+| `PushOutcome` | Enum: `Accepted(usize)` or `TooLarge` — opt-in via `push_checked()` |
 | `FrameHeader` | 11-byte binary frame header for all conduit messages |
 | `Encode` / `Decode` | Traits for fixed-layout binary serialization |
-| `Error` | Error types (`UnknownCommand`, `DecodeFailed`, `Serialize`, etc.) |
+| `Error` | Error types (`UnknownCommand`, `DecodeFailed`, `Serialize`, `UnknownChannel`, etc.) |
 
 ## Usage
 

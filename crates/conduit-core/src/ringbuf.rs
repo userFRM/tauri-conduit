@@ -25,15 +25,14 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
+use crate::codec::DRAIN_FRAME_OVERHEAD;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /// Default capacity in bytes (64 KB).
 const DEFAULT_CAPACITY: usize = 64 * 1024;
-
-/// Per-frame overhead: 4 bytes for the u32 LE length prefix.
-const FRAME_OVERHEAD: usize = 4;
 
 // ---------------------------------------------------------------------------
 // Inner
@@ -43,7 +42,7 @@ const FRAME_OVERHEAD: usize = 4;
 struct Inner {
     /// Buffered frames in FIFO order.
     frames: VecDeque<Vec<u8>>,
-    /// Total bytes used: sum of (FRAME_OVERHEAD + frame.len()) for each frame.
+    /// Total bytes used: sum of (DRAIN_FRAME_OVERHEAD + frame.len()) for each frame.
     bytes_used: usize,
     /// Maximum byte budget.
     capacity: usize,
@@ -62,7 +61,7 @@ impl Inner {
     /// Cost of storing a single frame (length prefix + payload).
     #[inline]
     fn frame_cost(frame: &[u8]) -> usize {
-        FRAME_OVERHEAD + frame.len()
+        DRAIN_FRAME_OVERHEAD + frame.len()
     }
 
     /// Drop the oldest frame, adjusting the byte counter. Returns `true` if
@@ -75,6 +74,24 @@ impl Inner {
             false
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// PushOutcome
+// ---------------------------------------------------------------------------
+
+/// Outcome of a [`RingBuffer::push`] operation.
+///
+/// Distinguishes between a frame being accepted (possibly with evictions)
+/// and a frame being discarded because it can never fit in the buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushOutcome {
+    /// Frame was accepted. The `usize` is the number of older frames
+    /// that were evicted to make room (may be `0`).
+    Accepted(usize),
+    /// Frame was too large to ever fit in this buffer (even when empty)
+    /// and was silently discarded. No data was written.
+    TooLarge,
 }
 
 // ---------------------------------------------------------------------------
@@ -101,12 +118,13 @@ impl RingBuffer {
     ///
     /// # Panics
     ///
-    /// Panics if `capacity` is less than [`FRAME_OVERHEAD`] (4 bytes), since
-    /// no frame could ever fit.
+    /// Panics if `capacity` is less than `DRAIN_FRAME_OVERHEAD + 1` (5 bytes),
+    /// since at least a 1-byte frame must be storable.
     pub fn new(capacity: usize) -> Self {
         assert!(
-            capacity >= FRAME_OVERHEAD,
-            "capacity must be at least {FRAME_OVERHEAD} bytes"
+            capacity > DRAIN_FRAME_OVERHEAD,
+            "capacity must be at least {} bytes (DRAIN_FRAME_OVERHEAD + 1)",
+            DRAIN_FRAME_OVERHEAD + 1,
         );
         Self {
             inner: Mutex::new(Inner::new(capacity)),
@@ -126,14 +144,25 @@ impl RingBuffer {
     ///
     /// If the frame itself is larger than the total capacity it is silently
     /// discarded and the return value is `0`.
-    #[must_use]
     pub fn push(&self, frame: &[u8]) -> usize {
+        match self.push_checked(frame) {
+            PushOutcome::Accepted(n) => n,
+            PushOutcome::TooLarge => 0,
+        }
+    }
+
+    /// Push a frame with a richer outcome report.
+    ///
+    /// Like [`push`](Self::push), but returns [`PushOutcome::TooLarge`] when
+    /// the frame can never fit, instead of silently returning `0`.
+    #[must_use]
+    pub fn push_checked(&self, frame: &[u8]) -> PushOutcome {
         let cost = Inner::frame_cost(frame);
-        let mut inner = self.inner.lock().expect("ring buffer lock poisoned");
+        let mut inner = crate::lock_or_recover(&self.inner);
 
         // Frame too large for this buffer — discard it.
         if cost > inner.capacity {
-            return 0;
+            return PushOutcome::TooLarge;
         }
 
         let mut dropped = 0usize;
@@ -146,7 +175,7 @@ impl RingBuffer {
 
         inner.frames.push_back(frame.to_vec());
         inner.bytes_used += cost;
-        dropped
+        PushOutcome::Accepted(dropped)
     }
 
     /// Drain all buffered frames into a single binary blob and clear the
@@ -164,30 +193,31 @@ impl RingBuffer {
     /// Returns an empty `Vec` if the buffer is empty.
     #[must_use]
     pub fn drain_all(&self) -> Vec<u8> {
-        let mut inner = self.inner.lock().expect("ring buffer lock poisoned");
-
-        if inner.frames.is_empty() {
-            return Vec::new();
-        }
-
-        // Pre-calculate output size: 4 (count) + sum of (4 + len) per frame.
-        let output_size = 4 + inner.bytes_used;
+        // Swap the frames out under the lock, then serialize without contention.
+        let (mut frames, bytes_used) = {
+            let mut inner = crate::lock_or_recover(&self.inner);
+            if inner.frames.is_empty() {
+                return Vec::new();
+            }
+            let frames = std::mem::take(&mut inner.frames);
+            let bytes_used = inner.bytes_used;
+            inner.bytes_used = 0;
+            (frames, bytes_used)
+        };
+        // Lock released — serialize without holding the mutex.
+        let output_size = 4usize.saturating_add(bytes_used);
         let mut buf = Vec::with_capacity(output_size);
 
         // Frame count header.
-        let count = inner.frames.len() as u32;
+        let count = frames.len() as u32;
         buf.extend_from_slice(&count.to_le_bytes());
 
         // Each frame: [u32 LE len][bytes].
-        for frame in &inner.frames {
+        for frame in frames.make_contiguous() {
             let len = frame.len() as u32;
             buf.extend_from_slice(&len.to_le_bytes());
             buf.extend_from_slice(frame);
         }
-
-        // Reset.
-        inner.frames.clear();
-        inner.bytes_used = 0;
 
         buf
     }
@@ -197,7 +227,7 @@ impl RingBuffer {
     /// Returns `None` if the buffer is empty.
     #[must_use]
     pub fn try_pop(&self) -> Option<Vec<u8>> {
-        let mut inner = self.inner.lock().expect("ring buffer lock poisoned");
+        let mut inner = crate::lock_or_recover(&self.inner);
         let frame = inner.frames.pop_front()?;
         inner.bytes_used -= Inner::frame_cost(&frame);
         Some(frame)
@@ -206,34 +236,24 @@ impl RingBuffer {
     /// Number of frames currently buffered.
     #[must_use]
     pub fn frame_count(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("ring buffer lock poisoned")
-            .frames
-            .len()
+        crate::lock_or_recover(&self.inner).frames.len()
     }
 
     /// Number of bytes currently used (including per-frame length prefixes).
     #[must_use]
     pub fn bytes_used(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("ring buffer lock poisoned")
-            .bytes_used
+        crate::lock_or_recover(&self.inner).bytes_used
     }
 
     /// Total byte capacity of the buffer.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("ring buffer lock poisoned")
-            .capacity
+        crate::lock_or_recover(&self.inner).capacity
     }
 
     /// Clear all buffered frames.
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().expect("ring buffer lock poisoned");
+        let mut inner = crate::lock_or_recover(&self.inner);
         inner.frames.clear();
         inner.bytes_used = 0;
     }
@@ -241,7 +261,7 @@ impl RingBuffer {
 
 impl std::fmt::Debug for RingBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.inner.lock().expect("ring buffer lock poisoned");
+        let inner = crate::lock_or_recover(&self.inner);
         f.debug_struct("RingBuffer")
             .field("frame_count", &inner.frames.len())
             .field("bytes_used", &inner.bytes_used)
@@ -312,7 +332,7 @@ mod tests {
         assert_eq!(dropped, 0);
 
         // Third push must drop the oldest to fit.
-        let dropped = rb.push(b"cccc"); // cost 8, needs to drop "aaaa"
+        let dropped = rb.push(b"cccc"); // drops "aaaa"
         assert_eq!(dropped, 1);
 
         assert_eq!(rb.frame_count(), 2);
@@ -452,9 +472,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "capacity must be at least")]
+    #[should_panic(expected = "capacity must be at least 5 bytes")]
     fn tiny_capacity_panics() {
-        RingBuffer::new(3); // less than FRAME_OVERHEAD
+        RingBuffer::new(4); // equal to DRAIN_FRAME_OVERHEAD, but less than DRAIN_FRAME_OVERHEAD + 1
     }
 
     #[test]

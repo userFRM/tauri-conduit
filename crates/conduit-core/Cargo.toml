@@ -1,10 +1,10 @@
 [package]
 name = "conduit-core"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Binary IPC core: codec, dispatch table, ring buffer."
+description = "Binary IPC core: codec, router, ring buffer, handler trait."
 keywords = ["tauri", "ipc", "binary", "codec", "ringbuf"]
 categories = ["encoding", "data-structures", "gui"]
 repository = "https://github.com/userFRM/tauri-conduit"
@@ -16,7 +16,7 @@ serde = { version = "1", features = ["derive"] }
 sonic-rs = "0.3"
 
 [dev-dependencies]
-conduit-derive = { version = "1.0.0", path = "../conduit-derive" }
+conduit-derive = { version = "2.0.0", path = "../conduit-derive" }
 criterion = { version = "0.5", features = ["html_reports"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

@@ -67,6 +67,10 @@ export function unpackFrame(
     payloadLen: view.getUint32(7, true),
   };
 
+  if (header.version !== PROTOCOL_VERSION) {
+    throw new Error(`unsupported conduit protocol version: ${header.version} (expected ${PROTOCOL_VERSION})`);
+  }
+
   // Validate that the buffer contains the full payload.
   const totalSize = FRAME_HEADER_SIZE + header.payloadLen;
   if (data.byteLength < totalSize) return null;
