@@ -6,331 +6,222 @@
   <title>Conduit E2E Benchmark</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; padding: 24px; background: #0d1117; color: #c9d1d9; }
-    h1 { font-size: 1.4rem; margin-bottom: 4px; color: #58a6ff; }
-    .subtitle { font-size: 0.85rem; color: #8b949e; margin-bottom: 20px; }
-    .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; }
-    button { padding: 8px 16px; border: 1px solid #30363d; border-radius: 6px; background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 0.9rem; }
-    button:hover { background: #30363d; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.primary { background: #238636; border-color: #2ea043; color: #fff; }
-    button.primary:hover { background: #2ea043; }
-    label { font-size: 0.85rem; color: #8b949e; }
-    input[type="number"] { width: 80px; padding: 6px 8px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #c9d1d9; font-size: 0.9rem; }
-    #status { font-size: 0.85rem; color: #8b949e; min-height: 1.2em; margin-bottom: 16px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-    th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
-    th { color: #8b949e; font-weight: 600; }
-    td.num { font-family: 'SF Mono', 'Fira Code', monospace; text-align: right; }
-    tr.winner td { color: #3fb950; }
-    .speedup { font-weight: 600; }
-    .faster { color: #3fb950; }
-    .slower { color: #f85149; }
-    pre { background: #161b22; padding: 12px; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
-    .section { margin-bottom: 24px; }
-    .section h2 { font-size: 1.1rem; margin-bottom: 8px; color: #c9d1d9; }
-    .note { font-size: 0.8rem; color: #8b949e; margin-top: 8px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0a0a0a; color: #e0e0e0; padding: 24px; }
+    h1 { font-size: 20px; margin-bottom: 8px; color: #fff; }
+    #status { font-size: 14px; color: #888; margin-bottom: 16px; min-height: 20px; }
+    #status.running { color: #4fc3f7; }
+    #status.done { color: #66bb6a; }
+    #status.error { color: #ef5350; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    th, td { padding: 8px 12px; text-align: right; border: 1px solid #333; }
+    th { background: #1a1a1a; color: #aaa; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+    td:first-child, th:first-child { text-align: left; }
+    tr.row-small td { background: #111; }
+    tr.row-medium td { background: #131313; }
+    tr.row-large td { background: #161616; }
+    .speedup { color: #66bb6a; font-weight: 700; }
+    .label { color: #ccc; }
+    button { margin-top: 16px; padding: 8px 20px; background: #1e88e5; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+    button:disabled { background: #444; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #1565c0; }
   </style>
 </head>
 <body>
   <h1>Conduit E2E Benchmark</h1>
-  <p class="subtitle">Full roundtrip: JS serialize → WebView bridge → Rust handler → WebView bridge → JS parse</p>
-
-  <div class="controls">
-    <button id="btn-run" class="primary" onclick="runAll()">Run Benchmark</button>
-    <label>Iterations: <input type="number" id="iterations" value="1000" min="10" max="100000"></label>
-    <label>Warmup: <input type="number" id="warmup" value="50" min="0" max="1000"></label>
-    <button onclick="clearResults()">Clear</button>
-  </div>
-
-  <div id="status"></div>
-
-  <div class="section">
-    <h2>Results</h2>
-    <table id="results">
-      <thead>
-        <tr>
-          <th>Test</th>
-          <th style="text-align:right">Median (ms)</th>
-          <th style="text-align:right">P95 (ms)</th>
-          <th style="text-align:right">P99 (ms)</th>
-          <th style="text-align:right">Min (ms)</th>
-          <th style="text-align:right">Max (ms)</th>
-          <th style="text-align:right">Ops/sec</th>
-          <th>Speedup</th>
-        </tr>
-      </thead>
-      <tbody id="results-body"></tbody>
-    </table>
-    <p class="note">Speedup is conduit vs Tauri for the same payload size (median). Lower latency = faster.</p>
-  </div>
-
-  <div class="section">
-    <h2>Raw Log</h2>
-    <pre id="log"></pre>
-  </div>
+  <div id="status">Initializing...</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Payload</th>
+        <th>Tauri median</th>
+        <th>Tauri P95</th>
+        <th>Conduit median</th>
+        <th>Conduit P95</th>
+        <th>Speedup</th>
+      </tr>
+    </thead>
+    <tbody id="results"></tbody>
+  </table>
+  <button id="runBtn" disabled>Run Benchmark</button>
 
   <script>
-    // ── Wait for Tauri runtime ────────────────────────────────
-    // window.__TAURI__ may not be injected yet when the script parses.
-    // Defer access until actually needed.
+    // ── Tauri API (deferred access) ───────────────────────────────
     function tauriInvoke(cmd, args) {
       if (!window.__TAURI__) throw new Error('Tauri runtime not available');
       return window.__TAURI__.core.invoke(cmd, args);
     }
 
-    // ── Conduit bootstrap ─────────────────────────────────────
+    // ── Conduit bootstrap ─────────────────────────────────────────
     let _conduit = null;
 
     async function getConduit() {
       if (_conduit) return _conduit;
-
-      // Bootstrap: get invoke key + protocol base via Tauri IPC
-      const info = await tauriInvoke('plugin:conduit|bootstrap');
-      const invokeKey = info.invoke_key;
-      const protocolBase = info.protocol_base;
-
+      var info;
+      try {
+        info = await tauriInvoke('plugin:conduit|conduit_bootstrap');
+        console.log('Bootstrap info:', JSON.stringify(info));
+      } catch (bootstrapErr) {
+        console.error('Bootstrap failed:', bootstrapErr);
+        throw new Error('Bootstrap failed: ' + JSON.stringify(bootstrapErr));
+      }
+      const invokeKey = info.invoke_key || info.invokeKey;
+      const base = info.protocol_base || info.protocolBase;
       _conduit = {
         async invoke(cmd, args) {
-          const payload = new TextEncoder().encode(JSON.stringify(args || {}));
-          const url = `${protocolBase}/invoke/${encodeURIComponent(cmd)}`;
+          const body = JSON.stringify(args || {});
+          const url = base + '/invoke/' + encodeURIComponent(cmd);
           const resp = await fetch(url, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/octet-stream',
-              'X-Conduit-Key': invokeKey,
-            },
-            body: payload,
+            headers: { 'Content-Type': 'application/octet-stream', 'X-Conduit-Key': invokeKey },
+            body: new TextEncoder().encode(body),
           });
-          if (!resp.ok) {
-            const text = await resp.text();
-            throw new Error(`conduit error ${resp.status}: ${text}`);
-          }
-          const buf = await resp.arrayBuffer();
-          if (buf.byteLength === 0) return null;
-          return JSON.parse(new TextDecoder().decode(buf));
-        },
+          if (!resp.ok) throw new Error('Conduit error ' + resp.status + ': ' + (await resp.text()));
+          const text = new TextDecoder().decode(await resp.arrayBuffer());
+          return text.length === 0 ? null : JSON.parse(text);
+        }
       };
       return _conduit;
     }
 
-    // ── Payloads ──────────────────────────────────────────────
+    // ── Payloads ──────────────────────────────────────────────────
+    var SMALL = { timestamp: 1710000000000, price: 42567.89, volume: 1.23456, side: 1 };
 
-    const SMALL = { timestamp: 1700000000000, price: 42850.75, volume: 3.14159, side: 1 };
-
-    const MEDIUM = {
-      id: 123456789,
-      name: 'benchmark-medium-payload-test-struct',
-      values: Array.from({ length: 100 }, (_, i) => i * 1.5),
-      tags: Array.from({ length: 10 }, (_, i) => `tag-${String(i).padStart(4, '0')}-value`),
+    var MEDIUM = {
+      id: 9007199254740991,
+      name: 'benchmark_test_payload_with_a_reasonably_long_name_for_realism',
+      values: Array.from({ length: 100 }, function(_, i) { return Math.random() * 1000; }),
+      tags: ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel',
+             'india', 'juliet', 'kilo', 'lima', 'mike', 'november', 'oscar', 'papa'],
       active: true,
     };
 
-    const LARGE = {
-      header: 0xDEADBEEF, // JS number (no BigInt for JSON compat)
-      data: Array.from({ length: 65536 }, () => 0xAB),
-      checksum: 0x12345678,
+    var LARGE = {
+      header: 12345678,
+      data: Array.from({ length: 65536 }, function(_, i) { return i & 0xff; }),
+      checksum: 3141592653,
     };
 
-    // ── Stats ─────────────────────────────────────────────────
+    // ── Benchmark engine ──────────────────────────────────────────
+    var WARMUP = 50;
+    var ITERATIONS = 1000;
 
     function percentile(sorted, p) {
-      const idx = Math.ceil(p / 100 * sorted.length) - 1;
+      var idx = Math.ceil(p / 100 * sorted.length) - 1;
       return sorted[Math.max(0, idx)];
     }
 
-    function computeStats(times) {
-      const sorted = [...times].sort((a, b) => a - b);
-      const median = percentile(sorted, 50);
+    function stats(times) {
+      var s = times.slice().sort(function(a, b) { return a - b; });
       return {
-        median,
-        p95: percentile(sorted, 95),
-        p99: percentile(sorted, 99),
-        min: sorted[0],
-        max: sorted[sorted.length - 1],
-        opsPerSec: Math.round(1000 / median),
+        median: percentile(s, 50),
+        p95: percentile(s, 95),
+        p99: percentile(s, 99),
+        min: s[0],
+        max: s[s.length - 1],
       };
     }
 
-    // ── Benchmark runner ──────────────────────────────────────
-
-    async function benchTauri(cmd, payload, iterations, warmup) {
-      // Warmup
-      for (let i = 0; i < warmup; i++) {
-        await tauriInvoke(cmd, { payload });
+    async function bench(label, fn) {
+      for (var i = 0; i < WARMUP; i++) await fn();
+      // Batch 10 calls per measurement to overcome performance.now() 1ms clamping
+      var BATCH = 10;
+      var times = [];
+      for (var i = 0; i < ITERATIONS; i++) {
+        var t0 = performance.now();
+        for (var b = 0; b < BATCH; b++) await fn();
+        times.push((performance.now() - t0) / BATCH);
       }
-      // Timed
-      const times = [];
-      for (let i = 0; i < iterations; i++) {
-        const t0 = performance.now();
-        await tauriInvoke(cmd, { payload });
-        times.push(performance.now() - t0);
-      }
-      return times;
+      return Object.assign({ label: label }, stats(times));
     }
 
-    async function benchConduit(cmd, payload, iterations, warmup) {
-      const conduit = await getConduit();
-      // Warmup
-      for (let i = 0; i < warmup; i++) {
-        await conduit.invoke(cmd, { payload });
-      }
-      // Timed
-      const times = [];
-      for (let i = 0; i < iterations; i++) {
-        const t0 = performance.now();
-        await conduit.invoke(cmd, { payload });
-        times.push(performance.now() - t0);
-      }
-      return times;
-    }
+    // ── UI ────────────────────────────────────────────────────────
+    var statusEl = document.getElementById('status');
+    var resultsEl = document.getElementById('results');
+    var btn = document.getElementById('runBtn');
 
-    // ── UI ────────────────────────────────────────────────────
-
-    const log = document.getElementById('log');
-    const statusEl = document.getElementById('status');
-    const tbody = document.getElementById('results-body');
-
-    function appendLog(msg) {
-      log.textContent += msg + '\n';
-      log.scrollTop = log.scrollHeight;
-    }
-
-    function setStatus(msg) {
+    function setStatus(msg, cls) {
       statusEl.textContent = msg;
+      statusEl.className = cls || '';
     }
 
     function fmt(ms) {
-      if (ms < 0.01) return ms.toFixed(4);
-      if (ms < 1) return ms.toFixed(3);
-      return ms.toFixed(2);
+      if (ms < 1) return (ms * 1000).toFixed(0) + ' us';
+      return ms.toFixed(3) + ' ms';
     }
 
-    function addRow(label, stats, speedup) {
-      const tr = document.createElement('tr');
-      const speedupHtml = speedup
-        ? `<span class="speedup ${speedup > 1 ? 'faster' : 'slower'}">${speedup.toFixed(2)}x</span>`
-        : '—';
-      tr.innerHTML = `
-        <td>${label}</td>
-        <td class="num">${fmt(stats.median)}</td>
-        <td class="num">${fmt(stats.p95)}</td>
-        <td class="num">${fmt(stats.p99)}</td>
-        <td class="num">${fmt(stats.min)}</td>
-        <td class="num">${fmt(stats.max)}</td>
-        <td class="num">${stats.opsPerSec.toLocaleString()}</td>
-        <td>${speedupHtml}</td>
-      `;
-      tbody.appendChild(tr);
-      return tr;
+    function addRow(label, tauri, conduit) {
+      var speedup = tauri.median / conduit.median;
+      var cls = label.indexOf('25B') >= 0 ? 'row-small' : label.indexOf('1KB') >= 0 ? 'row-medium' : 'row-large';
+      var tr = document.createElement('tr');
+      tr.className = cls;
+      tr.innerHTML =
+        '<td class="label">' + label + '</td>' +
+        '<td>' + fmt(tauri.median) + '</td>' +
+        '<td>' + fmt(tauri.p95) + '</td>' +
+        '<td>' + fmt(conduit.median) + '</td>' +
+        '<td>' + fmt(conduit.p95) + '</td>' +
+        '<td class="speedup">' + speedup.toFixed(1) + 'x</td>';
+      resultsEl.appendChild(tr);
+      return { label: label, tauri: tauri, conduit: conduit, speedup: speedup };
     }
 
-    function addSeparator(label) {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="8" style="color:#58a6ff;font-weight:600;padding-top:16px">${label}</td>`;
-      tbody.appendChild(tr);
-    }
-
-    function clearResults() {
-      tbody.innerHTML = '';
-      log.textContent = '';
-      setStatus('');
-    }
-
-    // ── Main ──────────────────────────────────────────────────
-
-    // Collect structured results for stdout output
-    const allResults = [];
-
+    // ── Run all benchmarks ────────────────────────────────────────
     async function runAll() {
-      const btn = document.getElementById('btn-run');
       btn.disabled = true;
-      clearResults();
-      allResults.length = 0;
-
-      const iterations = parseInt(document.getElementById('iterations').value) || 1000;
-      const warmup = parseInt(document.getElementById('warmup').value) || 50;
-
-      const lines = [];
-      function out(msg) { appendLog(msg); lines.push(msg); }
-
-      out(`E2E Benchmark — ${iterations} iterations, ${warmup} warmup`);
-      out(`Date: ${new Date().toISOString()}`);
-      out(`UA: ${navigator.userAgent}`);
-      out('');
+      resultsEl.innerHTML = '';
+      var rows = [];
 
       try {
-        // Ensure conduit is bootstrapped
-        setStatus('Bootstrapping conduit...');
-        await getConduit();
-        out('Conduit bootstrapped OK');
-        out('');
+        var conduit = await getConduit();
 
-        const tests = [
-          { label: '25B payload', tauri: 'tauri_echo_small', conduit: 'conduit_echo_small', payload: SMALL },
-          { label: '~1KB payload', tauri: 'tauri_echo_medium', conduit: 'conduit_echo_medium', payload: MEDIUM },
-          { label: '~64KB payload', tauri: 'tauri_echo_large', conduit: 'conduit_echo_large', payload: LARGE },
+        var tests = [
+          { label: '25B payload',   tauriCmd: 'tauri_echo_small',  conduitCmd: 'conduit_echo_small',  payload: SMALL },
+          { label: '~1KB payload',  tauriCmd: 'tauri_echo_medium', conduitCmd: 'conduit_echo_medium', payload: MEDIUM },
+          { label: '~64KB payload', tauriCmd: 'tauri_echo_large',  conduitCmd: 'conduit_echo_large',  payload: LARGE },
         ];
 
-        for (const test of tests) {
-          addSeparator(test.label);
+        for (var ti = 0; ti < tests.length; ti++) {
+          var t = tests[ti];
+          setStatus('Benchmarking ' + t.label + ' \u2014 Tauri...', 'running');
+          var tauriResult = await bench('Tauri ' + t.label, function() { return tauriInvoke(t.tauriCmd, { payload: t.payload }); });
 
-          // Tauri baseline
-          setStatus(`Running: Tauri ${test.label}...`);
-          out(`[Tauri] ${test.label}...`);
-          const tauriTimes = await benchTauri(test.tauri, test.payload, iterations, warmup);
-          const tauriStats = computeStats(tauriTimes);
-          out(`  median=${fmt(tauriStats.median)}ms  p95=${fmt(tauriStats.p95)}ms  p99=${fmt(tauriStats.p99)}ms  ops/s=${tauriStats.opsPerSec}`);
-          addRow(`Tauri invoke`, tauriStats, null);
+          setStatus('Benchmarking ' + t.label + ' \u2014 Conduit...', 'running');
+          var conduitResult = await bench('Conduit ' + t.label, function() { return conduit.invoke(t.conduitCmd, { payload: t.payload }); });
 
-          // Conduit
-          setStatus(`Running: Conduit ${test.label}...`);
-          out(`[Conduit] ${test.label}...`);
-          const conduitTimes = await benchConduit(test.conduit, test.payload, iterations, warmup);
-          const conduitStats = computeStats(conduitTimes);
-          const speedup = tauriStats.median / conduitStats.median;
-          out(`  median=${fmt(conduitStats.median)}ms  p95=${fmt(conduitStats.p95)}ms  p99=${fmt(conduitStats.p99)}ms  ops/s=${conduitStats.opsPerSec}  speedup=${speedup.toFixed(2)}x`);
-          addRow(`Conduit invoke`, conduitStats, speedup);
-
-          allResults.push({
-            size: test.label,
-            tauri: tauriStats,
-            conduit: conduitStats,
-            speedup,
-          });
-
-          out('');
+          rows.push(addRow(t.label, tauriResult, conduitResult));
         }
 
-        // Print summary table
-        out('╔══════════════════╦══════════════════╦══════════════════╦═════════╗');
-        out('║ Payload          ║ Tauri median     ║ Conduit median   ║ Speedup ║');
-        out('╠══════════════════╬══════════════════╬══════════════════╬═════════╣');
-        for (const r of allResults) {
-          const s = r.size.padEnd(16);
-          const t = (fmt(r.tauri.median) + ' ms').padStart(16);
-          const c = (fmt(r.conduit.median) + ' ms').padStart(16);
-          const x = (r.speedup.toFixed(2) + 'x').padStart(7);
-          out(`║ ${s} ║ ${t} ║ ${c} ║ ${x} ║`);
+        setStatus('Done! ' + ITERATIONS + ' iterations, ' + WARMUP + ' warmup.', 'done');
+
+        // ── Print ASCII table to stdout ───────────────────────────
+        var lines = [];
+        var W = [18, 18, 18, 9];
+        function pad(s, w) { while (s.length < w) s = ' ' + s; return s; }
+        function bar(c, ws) { var r = c; for (var i = 0; i < ws.length; i++) { var seg = ''; for (var j = 0; j < ws[i] + 2; j++) seg += c; r += seg + c; } return r; }
+
+        lines.push(bar('=', W));
+        lines.push('| ' + [pad('Payload', W[0]), pad('Tauri median', W[1]), pad('Conduit median', W[2]), pad('Speedup', W[3])].join(' | ') + ' |');
+        lines.push(bar('=', W));
+        for (var ri = 0; ri < rows.length; ri++) {
+          var r = rows[ri];
+          lines.push('| ' + [
+            pad(r.label, W[0]),
+            pad(fmt(r.tauri.median), W[1]),
+            pad(fmt(r.conduit.median), W[2]),
+            pad(r.speedup.toFixed(1) + 'x', W[3]),
+          ].join(' | ') + ' |');
         }
-        out('╚══════════════════╩══════════════════╩══════════════════╩═════════╝');
-        out('');
-        out('Benchmark complete.');
+        lines.push(bar('=', W));
 
-        setStatus('Done! Results printed to stdout.');
-
-        // Send results to Rust stdout
         await tauriInvoke('print_results', { output: lines.join('\n') });
 
-        // Auto-exit if --auto flag was passed (checked via URL param)
-        if (location.search.includes('auto')) {
-          await tauriInvoke('exit_app');
-        }
-      } catch (err) {
-        setStatus(`Error: ${err.message}`);
-        const errMsg = `\nERROR: ${err.stack || err.message}`;
-        out(errMsg);
-        await tauriInvoke('print_results', { output: lines.join('\n') }).catch(() => {});
+        // Auto-exit after printing
+        setTimeout(function() { tauriInvoke('exit_app').catch(function() {}); }, 500);
+
+      } catch (e) {
+        var msg = (e && e.message) ? e.message : JSON.stringify(e);
+        setStatus('Error: ' + msg, 'error');
+        console.error('Benchmark error:', e);
       } finally {
         btn.disabled = false;
       }
@@ -339,10 +230,12 @@
     // Auto-run once Tauri runtime is available
     function waitForTauri(cb, attempts) {
       if (window.__TAURI__) return cb();
-      if (attempts <= 0) { setStatus('Error: Tauri runtime not available after 10s'); return; }
-      setTimeout(() => waitForTauri(cb, attempts - 1), 100);
+      if (attempts <= 0) { setStatus('Error: Tauri runtime not available after 10s', 'error'); return; }
+      setTimeout(function() { waitForTauri(cb, attempts - 1); }, 100);
     }
-    window.addEventListener('DOMContentLoaded', () => waitForTauri(runAll, 100));
+    window.addEventListener('DOMContentLoaded', function() { waitForTauri(runAll, 100); });
+
+    btn.addEventListener('click', runAll);
   </script>
 </body>
 </html>

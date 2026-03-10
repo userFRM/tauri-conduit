@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-conduit-subscribe"
+description = "Enables the conduit_subscribe command without any pre-configured scope."
+commands.allow = ["conduit_subscribe"]
+
+[[permission]]
+identifier = "deny-conduit-subscribe"
+description = "Denies the conduit_subscribe command without any pre-configured scope."
+commands.deny = ["conduit_subscribe"]

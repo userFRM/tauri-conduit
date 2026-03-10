@@ -205,3 +205,50 @@ Standalone RingBuffer microbenchmarks.
 | ringbuf push+try_pop roundtrip | 34.918 ns | 34.745 ns | 35.082 ns |
 | ringbuf drain_all 100x64B | 4.188 us | 4.150 us | 4.227 us |
 | ringbuf push contention 2P/1C | 126.03 ns | 123.72 ns | 128.26 ns |
+
+---
+
+## 7. End-to-End Benchmarks (`bench-app`)
+
+Full JS↔Rust roundtrip through the WebView, measuring the complete invoke path:
+
+```
+Tauri:   JS JSON.stringify → postMessage → Tauri IPC bridge → serde_json::Value → T → handler
+         → T → serde_json::Value → JSON string → postMessage → JS JSON.parse
+
+Conduit: JS JSON.stringify → fetch(conduit://) → WebView bridge → sonic_rs::from_slice → T → handler
+         → T → sonic_rs::to_vec → response → WebView bridge → fetch() response → JS JSON.parse
+```
+
+### Environment
+
+| Property | Value |
+|---|---|
+| OS | macOS (Darwin 25.3.0) |
+| Architecture | aarch64 (Apple Silicon) |
+| Iterations | 1000 (50 warmup, batched 10x per measurement) |
+| Build | `cargo tauri build` (release, optimized) |
+
+### Results
+
+| Payload | Tauri median | Conduit median | Speedup |
+|---|---|---|---|
+| 25B (MarketTick) | 300 us | 200 us | 1.5x |
+| ~1KB (MediumPayload) | 300 us | 300 us | 1.0x |
+| ~64KB (LargePayload) | 6.700 ms | 3.100 ms | **2.2x** |
+
+### Analysis
+
+- **Small payloads (25B)**: Conduit is ~1.5x faster. The WebView bridge overhead (~200-300us) dominates at this scale, so the Rust-side 2.1x improvement (714ns → 333ns) is mostly absorbed.
+- **Medium payloads (~1KB)**: Roughly equal at the measurement resolution. Both paths are dominated by WebView bridge latency.
+- **Large payloads (~64KB)**: Conduit is **2.2x faster**. At this size, serialization dominates bridge overhead — sonic_rs direct deserialization (no intermediate `serde_json::Value`) delivers substantial end-to-end improvement.
+
+### Reproduction
+
+```sh
+cd examples/bench-app/src-tauri
+cargo tauri build
+./target/release/bench-app
+```
+
+The app auto-runs on launch — results print to stdout and display in the UI.

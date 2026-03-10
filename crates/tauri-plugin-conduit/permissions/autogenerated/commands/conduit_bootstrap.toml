@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-conduit-bootstrap"
+description = "Enables the conduit_bootstrap command without any pre-configured scope."
+commands.allow = ["conduit_bootstrap"]
+
+[[permission]]
+identifier = "deny-conduit-bootstrap"
+description = "Denies the conduit_bootstrap command without any pre-configured scope."
+commands.deny = ["conduit_bootstrap"]

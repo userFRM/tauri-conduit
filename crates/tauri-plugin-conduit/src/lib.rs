@@ -82,6 +82,7 @@ fn make_response(status: u16, content_type: &str, body: Vec<u8>) -> http::Respon
     http::Response::builder()
         .status(status)
         .header("Content-Type", content_type)
+        .header("Access-Control-Allow-Origin", "*")
         .body(body)
         .unwrap_or_else(|_| {
             http::Response::builder()
@@ -622,6 +623,20 @@ impl PluginBuilder {
             // Uses the asynchronous variant so async #[command] handlers
             // are spawned on tokio (truly async, like #[tauri::command]).
             .register_asynchronous_uri_scheme_protocol("conduit", move |ctx, request, responder| {
+                // Handle CORS preflight requests.
+                if request.method() == "OPTIONS" {
+                    let resp = http::Response::builder()
+                        .status(204)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                        .header("Access-Control-Allow-Headers", "Content-Type, X-Conduit-Key, X-Conduit-Webview")
+                        .header("Access-Control-Max-Age", "86400")
+                        .body(Vec::new())
+                        .expect("preflight response must not fail");
+                    responder.respond(resp);
+                    return;
+                }
+
                 // Extract the managed PluginState from the app handle.
                 let state: tauri::State<'_, PluginState<R>> = ctx.app_handle().state();
 
