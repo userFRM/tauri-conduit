@@ -1,9 +1,9 @@
-# conduit
+# tauri-conduit
 
 Facade crate for [tauri-conduit](https://github.com/userFRM/tauri-conduit) — re-exports `#[command]`, `handler!()`, and core types.
 
 ```rust
-use conduit::{command, handler};
+use tauri_conduit::{command, handler};
 
 #[command]
 fn greet(name: String) -> String {

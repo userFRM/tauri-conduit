@@ -1,7 +1,7 @@
 // Prevent console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use conduit::{command, handler};
+use tauri_conduit::{command, handler};
 use conduit_core::codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 

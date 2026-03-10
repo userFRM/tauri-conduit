@@ -1,5 +1,5 @@
 [package]
-name = "conduit"
+name = "tauri-conduit"
 version = "2.0.0"
 edition = "2024"
 rust-version = "1.85"

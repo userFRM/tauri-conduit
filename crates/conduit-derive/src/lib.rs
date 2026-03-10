@@ -219,7 +219,7 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use conduit::command;
+/// use tauri_conduit::command;
 ///
 /// // Named parameters — frontend sends { "name": "Alice", "greeting": "Hi" }
 /// #[command]
@@ -408,7 +408,7 @@ fn is_result_return(output: &syn::ReturnType) -> bool {
 /// (`__conduit_handler_{fn_name}`) implementing [`conduit_core::ConduitHandler`].
 /// This mirrors `#[tauri::command]` behavior: the function remains callable
 /// directly, and the handler struct is used for registration via
-/// `conduit::handler!(fn_name)`.
+/// `tauri_conduit::handler!(fn_name)`.
 fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
     let fn_name = &func.sig.ident;
     let fn_vis = &func.vis;
@@ -741,7 +741,7 @@ fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
 /// # Example
 ///
 /// ```rust,ignore
-/// use conduit::{command, handler};
+/// use tauri_conduit::{command, handler};
 ///
 /// #[command]
 /// fn greet(name: String) -> String {

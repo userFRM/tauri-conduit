@@ -4,7 +4,7 @@
 
 ## What this is
 
-`tauri-conduit` replaces Tauri's JSON-over-webview IPC with a binary custom protocol (`conduit://`) that runs entirely in-process. Single transport, no network surface. conduit-core stays sync (no tokio dependency). Async handlers are supported at the plugin level — `#[conduit::command] async fn` generates a `HandlerResponse::Async` future that the plugin spawns on tokio via `tauri::async_runtime::spawn`, exactly like `#[tauri::command]`.
+`tauri-conduit` replaces Tauri's JSON-over-webview IPC with a binary custom protocol (`conduit://`) that runs entirely in-process. Single transport, no network surface. conduit-core stays sync (no tokio dependency). Async handlers are supported at the plugin level — `#[tauri_conduit::command] async fn` generates a `HandlerResponse::Async` future that the plugin spawns on tokio via `tauri::async_runtime::spawn`, exactly like `#[tauri::command]`.
 
 Streaming uses a hybrid model: Rust pushes binary frames into a ring buffer + emits a `conduit:data-available` Tauri event. JS listens for the event, then drains binary data via `conduit://localhost/drain/<channel>`. Users can also poll with `drain()` directly.
 
@@ -29,7 +29,7 @@ crates/
       comparison_bench.rs    Tauri vs Level 1 vs Level 2 head-to-head
       handler_bench.rs       Handler registration mode benchmarks
       queue_bench.rs         Queue vs RingBuffer benchmarks
-  conduit/                  Facade crate (enables #[conduit::command] path)
+  conduit/                  Facade crate (enables #[tauri_conduit::command] path)
     src/lib.rs               Re-exports command macro, ConduitHandler, core types
   conduit-derive/           Proc macros
     src/lib.rs               #[derive(Encode, Decode)], #[command] (generates ConduitHandler impl), handler!()

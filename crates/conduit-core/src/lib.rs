@@ -9,7 +9,7 @@
 //!
 //! This crate depends on `serde` and `sonic-rs` unconditionally. These are
 //! required by the [`Router`] JSON handler methods, the [`ConduitHandler`]
-//! trait (which powers `#[conduit::command]`), and the [`Error::Serialize`]
+//! trait (which powers `#[tauri_conduit::command]`), and the [`Error::Serialize`]
 //! variant. The pure binary codec ([`Encode`]/[`Decode`], [`RingBuffer`],
 //! [`Queue`]) does not use JSON at runtime, but the types are not
 //! feature-gated because the handler system is considered a core part of

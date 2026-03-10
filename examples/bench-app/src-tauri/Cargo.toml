@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 tauri = { version = "2", features = ["test"] }
 tauri-plugin-conduit = { path = "../../../crates/tauri-plugin-conduit" }
-conduit = { path = "../../../crates/conduit" }
+tauri-conduit = { path = "../../../crates/conduit" }
 conduit-core = { path = "../../../crates/conduit-core" }
 conduit-derive = { path = "../../../crates/conduit-derive" }
 serde = { version = "1", features = ["derive"] }

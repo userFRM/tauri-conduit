@@ -126,10 +126,10 @@ npm install tauri-plugin-conduit
 
 ### 2. Register your commands (Rust)
 
-Use `#[conduit::command]` for named parameters, `State<T>`/`AppHandle`/`Window`/`Webview` injection, `Result<T, E>` returns, and async:
+Use `#[tauri_conduit::command]` for named parameters, `State<T>`/`AppHandle`/`Window`/`Webview` injection, `Result<T, E>` returns, and async:
 
 ```rust
-use conduit::command;
+use tauri_conduit::command;
 use tauri::State;
 
 struct AppState { app_name: String }
@@ -155,7 +155,7 @@ Register handlers in your Tauri builder using `handler!()` to resolve command fu
 
 ```rust
 // src-tauri/src/main.rs
-use conduit::handler;
+use tauri_conduit::handler;
 
 tauri::Builder::default()
     .plugin(
@@ -172,7 +172,7 @@ tauri::Builder::default()
 ```
 
 Six handler registration methods are available:
-- `handler(name, handler)` -- **recommended.** Use with `#[conduit::command]` + `handler!()`. Supports named parameters, `State<T>`, `AppHandle`, `Window`/`WebviewWindow`, `Webview` injection, `Result<T, E>`, and async. Full `#[tauri::command]` parity.
+- `handler(name, handler)` -- **recommended.** Use with `#[tauri_conduit::command]` + `handler!()`. Supports named parameters, `State<T>`, `AppHandle`, `Window`/`WebviewWindow`, `Webview` injection, `Result<T, E>`, and async. Full `#[tauri::command]` parity.
 - `handler_raw(name, closure)` -- legacy closure-based handler (`Fn(Vec<u8>, &dyn Any) -> Result<Vec<u8>, Error>`). Use for backward compatibility when migrating from v1.
 - `command_json(name, handler)` -- JSON in, JSON out. Single argument type (no named parameters, no State, no async).
 - `command_json_result(name, handler)` -- same as above, but the handler returns `Result<R, E>`. Errors are propagated to the caller.
@@ -189,7 +189,7 @@ const result = await invoke('get_ticks', { symbol: 'AAPL' });
 
 ### Parameter naming
 
-Like Tauri's `#[tauri::command]`, conduit's `#[command]` macro automatically converts Rust snake_case parameter names to camelCase in JSON. A Rust parameter `user_name: String` is passed as `{ userName: "Alice" }` from JavaScript.
+Like Tauri's `#[tauri::command]`, tauri-conduit's `#[command]` macro automatically converts Rust snake_case parameter names to camelCase in JSON. A Rust parameter `user_name: String` is passed as `{ userName: "Alice" }` from JavaScript.
 
 ## Streaming
 
@@ -307,7 +307,7 @@ sequenceDiagram
 |---|---|---|---|
 | **Transport** | Webview bridge | Custom protocol (in-process) | Custom protocol (in-process) |
 | **Rust-side JSON** | serde_json: bytes -> Value -> T (double parse) | sonic-rs: bytes -> T (single parse, SIMD) | No JSON |
-| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[conduit::command]` + `handler!()`: named params, `State<T>`, `AppHandle`, `Window`/`Webview`, `Result<T,E>`, sync + async (tokio-spawned) | `command_binary(name, fn)`: Encode/Decode types, sync only |
+| **Handler registration** | `#[tauri::command]`: named params, `State<T>`, `Result<T,E>`, async | `#[tauri_conduit::command]` + `handler!()`: named params, `State<T>`, `AppHandle`, `Window`/`Webview`, `Result<T,E>`, sync + async (tokio-spawned) | `command_binary(name, fn)`: Encode/Decode types, sync only |
 | **Streaming** | Manual event wiring | Built-in push + drain (lossy and ordered) | Built-in push + drain (lossy and ordered) |
 | **Network surface** | None | None | None |
 
@@ -342,7 +342,7 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 ## Differences from Tauri's built-in IPC
 
-Level 1 is a drop-in replacement — change one import and you're done. `#[conduit::command]` has full parity with `#[tauri::command]`: named parameters (camelCase conversion included), `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
+Level 1 is a drop-in replacement — change one import and you're done. `#[tauri_conduit::command]` has full parity with `#[tauri::command]`: named parameters (camelCase conversion included), `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
 
 For streaming, conduit provides high-throughput ring buffer channels (`subscribe()`/`drain()`). For per-invocation progress callbacks, use `AppHandle::emit()` directly — handlers have full access to Tauri's event system via `AppHandle` injection.
 
@@ -359,7 +359,7 @@ tauri-conduit/
     tauri-plugin-conduit/      TypeScript client (tauri-plugin-conduit)
 ```
 
-The `conduit` facade crate (6 lines) exists solely to enable the `#[conduit::command]` attribute path. It re-exports the proc macro and core types.
+The `tauri-conduit` facade crate (6 lines) exists solely to enable the `#[tauri_conduit::command]` attribute path. It re-exports the proc macro and core types.
 
 ### Testing
 

@@ -12,7 +12,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use conduit::{command, handler};
+//! use tauri_conduit::{command, handler};
 //!
 //! #[command]
 //! fn greet(name: String) -> String {
@@ -42,7 +42,7 @@
 /// named-parameter handlers:
 ///
 /// ```rust,ignore
-/// use conduit::{command, handler};
+/// use tauri_conduit::{command, handler};
 ///
 /// #[command]
 /// fn greet(name: String, greeting: String) -> String {
@@ -378,14 +378,14 @@ impl PluginBuilder {
 
     // -- ConduitHandler-based (#[command]-generated, sync or async) ----------
 
-    /// Register a `#[conduit::command]`-generated handler.
+    /// Register a `#[tauri_conduit::command]`-generated handler.
     ///
     /// Works with both sync and async handlers. Sync handlers are dispatched
     /// inline. Async handlers are spawned on the tokio runtime — truly async,
     /// exactly like `#[tauri::command]`.
     ///
     /// ```rust,ignore
-    /// use conduit::{command, handler};
+    /// use tauri_conduit::{command, handler};
     ///
     /// #[command]
     /// fn greet(name: String) -> String {
@@ -415,7 +415,7 @@ impl PluginBuilder {
     ///
     /// Use this for backward compatibility when migrating from closure-based
     /// registration. For new code, prefer [`handler`](Self::handler) with
-    /// `#[conduit::command]` + `handler!()`.
+    /// `#[tauri_conduit::command]` + `handler!()`.
     pub fn handler_raw<F>(mut self, name: impl Into<String>, handler: F) -> Self
     where
         F: Fn(Vec<u8>, &dyn std::any::Any) -> Result<Vec<u8>, conduit_core::Error>
@@ -461,10 +461,10 @@ impl PluginBuilder {
     /// JSON. On error, the error's `Display` text is returned to the caller.
     ///
     /// For Tauri-style named parameters with `Result` returns, prefer
-    /// [`handler`](Self::handler) with `#[conduit::command]` instead:
+    /// [`handler`](Self::handler) with `#[tauri_conduit::command]` instead:
     ///
     /// ```rust,ignore
-    /// use conduit::command;
+    /// use tauri_conduit::command;
     ///
     /// #[command]
     /// fn divide(a: f64, b: f64) -> Result<f64, String> {
@@ -926,7 +926,7 @@ impl Default for PluginBuilder {
 /// This is the main entry point for using the conduit Tauri plugin:
 ///
 /// ```rust,ignore
-/// use conduit::command;
+/// use tauri_conduit::command;
 ///
 /// #[command]
 /// fn greet(name: String) -> String {

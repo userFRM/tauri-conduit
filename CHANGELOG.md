@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`#[conduit::command]` attribute macro** with full `#[tauri::command]` parity: named parameters, `State<T>` injection, `AppHandle`/`Window`/`WebviewWindow`/`Webview` injection, `Result<T, E>` returns, and truly async handlers (tokio-spawned)
+- **`#[tauri_conduit::command]` attribute macro** with full `#[tauri::command]` parity: named parameters, `State<T>` injection, `AppHandle`/`Window`/`WebviewWindow`/`Webview` injection, `Result<T, E>` returns, and truly async handlers (tokio-spawned)
 - **`handler!()` proc macro** to resolve command functions to their generated handler structs for registration
 - **`ConduitHandler` trait** with `HandlerResponse::Sync` and `HandlerResponse::Async` variants
 - **`HandlerContext`** wrapping `Arc<dyn Any>` app handle + optional webview label
@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking:** `.handler()` now accepts `impl ConduitHandler` instead of a closure. Use `handler_raw()` for the old closure signature, or migrate to `#[conduit::command]` + `handler!()`
+- **Breaking:** `.handler()` now accepts `impl ConduitHandler` instead of a closure. Use `handler_raw()` for the old closure signature, or migrate to `#[tauri_conduit::command]` + `handler!()`
 - **Breaking:** `RingBuffer::push()` returns `usize` (number of evicted frames) instead of `PushOutcome`. Use `push_checked()` for richer outcome
 - **Breaking:** `ChannelBuffer::push()` returns `Result<usize, Error>` instead of `Result<PushOutcome, Error>`. Use `push_checked()` for richer outcome
 - **Breaking:** `Error::Serialize` wraps `sonic_rs::Error` directly instead of `String` (restores `source()` chain)
