@@ -340,16 +340,13 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 **Threat model**: The invoke key protects against cross-origin requests (other tabs, browser extensions intercepting network requests). It does **not** protect against malicious JavaScript running in the same WebView context -- any JS with access to the page can obtain the key via `fetch()` interception or DevTools. This matches Tauri's own trust model: the WebView JS context is trusted. Disable DevTools in production builds.
 
-## Tradeoffs
+## Differences from Tauri's built-in IPC
 
 Level 1 is a drop-in replacement — change one import and you're done. `#[conduit::command]` has full parity with `#[tauri::command]`: named parameters, `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
 
-A few minor differences to be aware of:
+One thing to know: **parameter names stay snake_case** (no automatic camelCase conversion). A Rust parameter `user_name` is `{ user_name: "Alice" }` in JS, not `{ userName: "Alice" }`.
 
-- **Parameter naming** — snake_case stays snake_case (no automatic camelCase conversion). `user_name` in Rust = `user_name` in JS.
-- **Streaming model** — conduit uses pre-registered ring buffer channels (`subscribe()`/`drain()`) instead of Tauri's per-invocation `Channel` parameter. Different pattern, but straightforward to adopt.
-- **Binary mode (Level 2)** — raw bytes are opaque in devtools. Only use Level 2 on hot paths where the speedup matters.
-- **Wry-only** — hardcodes `tauri::Wry` (the only production Tauri runtime).
+For streaming, conduit provides high-throughput ring buffer channels (`subscribe()`/`drain()`). For per-invocation progress callbacks, use `AppHandle::emit()` directly — handlers have full access to Tauri's event system via `AppHandle` injection.
 
 ## Project layout
 
