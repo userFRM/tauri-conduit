@@ -307,6 +307,18 @@
           "markdownDescription": "Denies the bootstrap command without any pre-configured scope."
         },
         {
+          "description": "Enables the conduit_bootstrap command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-conduit-bootstrap",
+          "markdownDescription": "Enables the conduit_bootstrap command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the conduit_bootstrap command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-conduit-bootstrap",
+          "markdownDescription": "Denies the conduit_bootstrap command without any pre-configured scope."
+        },
+        {
           "description": "Enables the conduit_subscribe command without any pre-configured scope.",
           "type": "string",
           "const": "allow-conduit-subscribe",
@@ -319,10 +331,10 @@
           "markdownDescription": "Denies the conduit_subscribe command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the conduit plugin — allows bootstrap and subscribe.\n#### This default permission set includes:\n\n- `allow-bootstrap`\n- `allow-conduit-subscribe`",
+          "description": "Default permissions for the conduit plugin — allows bootstrap and subscribe.\n#### This default permission set includes:\n\n- `allow-conduit-bootstrap`\n- `allow-conduit-subscribe`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the conduit plugin — allows bootstrap and subscribe.\n#### This default permission set includes:\n\n- `allow-bootstrap`\n- `allow-conduit-subscribe`"
+          "markdownDescription": "Default permissions for the conduit plugin — allows bootstrap and subscribe.\n#### This default permission set includes:\n\n- `allow-conduit-bootstrap`\n- `allow-conduit-subscribe`"
         }
       ]
     }

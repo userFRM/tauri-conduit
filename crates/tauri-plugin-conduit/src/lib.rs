@@ -629,7 +629,10 @@ impl PluginBuilder {
                         .status(204)
                         .header("Access-Control-Allow-Origin", "*")
                         .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                        .header("Access-Control-Allow-Headers", "Content-Type, X-Conduit-Key, X-Conduit-Webview")
+                        .header(
+                            "Access-Control-Allow-Headers",
+                            "Content-Type, X-Conduit-Key, X-Conduit-Webview",
+                        )
                         .header("Access-Control-Max-Age", "86400")
                         .body(Vec::new())
                         .expect("preflight response must not fail");

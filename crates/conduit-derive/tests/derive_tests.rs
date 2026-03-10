@@ -580,7 +580,7 @@ fn command_async_unit_return() {
 }
 
 // ---------------------------------------------------------------------------
-// 13. Multi-word parameter names use snake_case in JSON
+// 13. Multi-word parameter names use camelCase in JSON (matching Tauri)
 // ---------------------------------------------------------------------------
 
 #[command]
@@ -589,11 +589,11 @@ fn greet_with_full_name(first_name: String, last_name: String) -> String {
 }
 
 #[test]
-fn command_snake_case_params() {
-    // JSON keys match the Rust parameter names exactly (snake_case).
+fn command_camel_case_params() {
+    // Rust snake_case params → camelCase JSON keys (matching Tauri's behavior).
     let payload = serde_json::to_vec(&serde_json::json!({
-        "first_name": "Alice",
-        "last_name": "Smith"
+        "firstName": "Alice",
+        "lastName": "Smith"
     }))
     .unwrap();
     let resp = call_sync(&handler!(greet_with_full_name), payload).unwrap();
@@ -681,7 +681,7 @@ fn command_option_param_missing() {
 }
 
 // ---------------------------------------------------------------------------
-// 15. Multi-word snake_case params (3+ words)
+// 15. Multi-word params use camelCase in JSON
 // ---------------------------------------------------------------------------
 
 #[command]
@@ -690,10 +690,10 @@ fn three_word_params(my_long_name: String, http_status_code: u16) -> String {
 }
 
 #[test]
-fn command_three_word_snake_case() {
+fn command_three_word_camel_case() {
     let payload = serde_json::to_vec(&serde_json::json!({
-        "my_long_name": "test",
-        "http_status_code": 200
+        "myLongName": "test",
+        "httpStatusCode": 200
     }))
     .unwrap();
     let resp = call_sync(&handler!(three_word_params), payload).unwrap();

@@ -201,8 +201,9 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 /// This is conduit's 1:1 equivalent of `#[tauri::command]`. The macro supports:
 ///
 /// - **Named parameters** — generates a hidden args struct with
-///   `#[derive(Deserialize)]`. Parameter names stay snake_case (no camelCase
-///   conversion).
+///   `#[derive(Deserialize)]` and `#[serde(rename_all = "camelCase")]`.
+///   Rust snake_case parameters are automatically converted to camelCase
+///   in JSON, matching `#[tauri::command]` behavior.
 /// - **`State<T>` injection** — parameters whose type path ends in `State`
 ///   are extracted from the context (which must be an `AppHandle<Wry>`).
 /// - **`AppHandle` injection** — parameters whose type path ends in `AppHandle`.
@@ -672,7 +673,7 @@ fn impl_conduit_command(func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
             #[doc(hidden)]
             #[allow(non_camel_case_types)]
             #[derive(::conduit_core::serde::Deserialize)]
-            #[serde(crate = "::conduit_core::serde")]
+            #[serde(crate = "::conduit_core::serde", rename_all = "camelCase")]
             struct #struct_name {
                 #(#field_defs),*
             }

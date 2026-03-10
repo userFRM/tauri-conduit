@@ -189,7 +189,7 @@ const result = await invoke('get_ticks', { symbol: 'AAPL' });
 
 ### Parameter naming
 
-Unlike Tauri's `#[tauri::command]`, conduit's `#[command]` macro does **not** rename parameters. Rust snake_case parameter names stay snake_case in JSON. A Rust parameter `user_name: String` must be passed as `{ user_name: "Alice" }` from JavaScript. This avoids the silent mismatch that camelCase renaming can cause.
+Like Tauri's `#[tauri::command]`, conduit's `#[command]` macro automatically converts Rust snake_case parameter names to camelCase in JSON. A Rust parameter `user_name: String` is passed as `{ userName: "Alice" }` from JavaScript.
 
 ## Streaming
 
@@ -342,9 +342,7 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 ## Differences from Tauri's built-in IPC
 
-Level 1 is a drop-in replacement — change one import and you're done. `#[conduit::command]` has full parity with `#[tauri::command]`: named parameters, `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
-
-One thing to know: **parameter names stay snake_case** (no automatic camelCase conversion). A Rust parameter `user_name` is `{ user_name: "Alice" }` in JS, not `{ userName: "Alice" }`.
+Level 1 is a drop-in replacement — change one import and you're done. `#[conduit::command]` has full parity with `#[tauri::command]`: named parameters (camelCase conversion included), `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
 
 For streaming, conduit provides high-throughput ring buffer channels (`subscribe()`/`drain()`). For per-invocation progress callbacks, use `AppHandle::emit()` directly — handlers have full access to Tauri's event system via `AppHandle` injection.
 

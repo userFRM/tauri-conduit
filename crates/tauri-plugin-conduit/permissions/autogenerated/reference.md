@@ -4,7 +4,7 @@ Default permissions for the conduit plugin — allows bootstrap and subscribe.
 
 #### This default permission set includes the following:
 
-- `allow-bootstrap`
+- `allow-conduit-bootstrap`
 - `allow-conduit-subscribe`
 
 ## Permission Table
@@ -38,6 +38,32 @@ Enables the bootstrap command without any pre-configured scope.
 <td>
 
 Denies the bootstrap command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`conduit:allow-conduit-bootstrap`
+
+</td>
+<td>
+
+Enables the conduit_bootstrap command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`conduit:deny-conduit-bootstrap`
+
+</td>
+<td>
+
+Denies the conduit_bootstrap command without any pre-configured scope.
 
 </td>
 </tr>
