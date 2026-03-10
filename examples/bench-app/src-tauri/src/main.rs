@@ -47,8 +47,7 @@ impl Decode for SmallPayload {
 }
 
 /// ~1KB as JSON (medium payload)
-/// Vec<f64> and Vec<String> don't implement Encode/Decode,
-/// so this payload can only use Level 1 (JSON).
+/// ~1KB as JSON (medium payload)
 #[derive(Clone, Serialize, Deserialize)]
 struct MediumPayload {
     id: u64,
@@ -56,6 +55,40 @@ struct MediumPayload {
     values: Vec<f64>,
     tags: Vec<String>,
     active: bool,
+}
+
+impl Encode for MediumPayload {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        self.id.encode(buf);
+        self.name.encode(buf);
+        self.values.encode(buf);
+        self.tags.encode(buf);
+        self.active.encode(buf);
+    }
+    fn encode_size(&self) -> usize {
+        self.id.encode_size()
+            + self.name.encode_size()
+            + self.values.encode_size()
+            + self.tags.encode_size()
+            + self.active.encode_size()
+    }
+}
+
+impl Decode for MediumPayload {
+    fn decode(data: &[u8]) -> Option<(Self, usize)> {
+        let mut off = 0;
+        let (id, n) = u64::decode(&data[off..])?;
+        off += n;
+        let (name, n) = String::decode(&data[off..])?;
+        off += n;
+        let (values, n) = Vec::<f64>::decode(&data[off..])?;
+        off += n;
+        let (tags, n) = Vec::<String>::decode(&data[off..])?;
+        off += n;
+        let (active, n) = bool::decode(&data[off..])?;
+        off += n;
+        Some((Self { id, name, values, tags, active }, off))
+    }
 }
 
 /// ~64KB as JSON (large payload — 64KB data array)
@@ -150,6 +183,7 @@ fn main() {
                 .handler("conduit_echo_large", handler!(conduit_echo_large))
                 // Level 2: binary via custom protocol (no JSON)
                 .command_binary("binary_echo_small", |p: SmallPayload| p)
+                .command_binary("binary_echo_medium", |p: MediumPayload| p)
                 .command_binary("binary_echo_large", |p: LargePayload| p)
                 .build(),
         )

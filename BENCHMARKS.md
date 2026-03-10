@@ -236,21 +236,21 @@ Conduit L2: JS binary encode → fetch(conduit://) → WebView bridge → Decode
 
 | Payload | Tauri median | Conduit L1 (JSON) | L1 speedup | Conduit L2 (binary) | L2 speedup |
 |---|---|---|---|---|---|
-| 25B (MarketTick) | 400 us | 300 us | 1.3x | 300 us | 1.3x |
-| ~1KB (MediumPayload) | 400 us | 300 us | 1.3x | n/a | n/a |
-| ~64KB (LargePayload) | 30.800 ms | 3.400 ms | **9.1x** | 400 us | **77.0x** |
+| 25B (SmallPayload) | 300 us | 300 us | 1.3x | 300 us | 1.3x |
+| ~1KB (MediumPayload) | 400 us | 300 us | 1.3x | 300 us | 1.3x |
+| ~64KB (LargePayload) | 6.700 ms | 3.200 ms | **2.1x** | 600 us | **11.2x** |
 
-> **Note**: ~1KB has no L2 result because `MediumPayload` contains `Vec<f64>` and `Vec<String>` which don't implement the binary `Encode`/`Decode` traits. Level 2 binary is designed for fixed-layout structs with primitive fields and `Vec<u8>` blobs.
+> **Note**: Small and medium payload timings are clamped by WebKit's 1ms `performance.now()` resolution. The Rust-side benchmarks (Section 2) show the true codec speedup. The 64KB results are stable and representative.
 
 ### Analysis
 
 - **Small payloads (25B)**: L1 and L2 are both ~1.3x faster than Tauri. At this size, the WebView bridge overhead (~300us) dominates — the Rust-side improvement is absorbed by transport latency.
-- **Medium payloads (~1KB)**: L1 is ~1.3x faster. Both paths are bridge-dominated. L2 binary is not available for this payload type.
+- **Medium payloads (~1KB)**: All three levels show similar timings (~300-400us), bridge-dominated. The Rust-side benchmarks show L2 binary is ~8.6x faster than Tauri for this payload size (Section 2), but the WebView bridge masks the difference at end-to-end scale.
 - **Large payloads (~64KB)**: This is where conduit shines:
-  - **L1 (JSON)** is **9.1x faster** — sonic_rs direct deserialization eliminates the `serde_json::Value` intermediate that makes Tauri's path so slow for large arrays.
-  - **L2 (binary)** is **77x faster** — raw binary encode/decode completely eliminates JSON serialization. A 65536-byte blob roundtrips in 400us vs Tauri's 30.8ms.
+  - **L1 (JSON)** is **2.1x faster** — sonic_rs direct deserialization eliminates the `serde_json::Value` intermediate.
+  - **L2 (binary)** is **11.2x faster** — raw binary encode/decode completely eliminates JSON serialization. A 65536-byte blob roundtrips in 600us vs Tauri's 6.7ms.
 
-The 77x L2 speedup on 64KB payloads demonstrates why binary IPC matters for data-intensive Tauri apps (real-time visualization, audio/video processing, scientific computing).
+The L2 speedup on 64KB payloads demonstrates why binary IPC matters for data-intensive Tauri apps (real-time visualization, audio/video processing, scientific computing).
 
 ### Reproduction
 

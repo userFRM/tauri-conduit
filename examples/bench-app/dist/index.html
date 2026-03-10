@@ -152,6 +152,72 @@
       };
     }
 
+    // MediumPayload: u64 + String + Vec<f64> + Vec<String> + bool
+    function encodeMedium(obj) {
+      // Calculate total size
+      var nameBytes = new TextEncoder().encode(obj.name);
+      var tagBytes = obj.tags.map(function(t) { return new TextEncoder().encode(t); });
+      var size = 8 // u64 id
+        + 4 + nameBytes.length // String: u32 len + bytes
+        + 4 + obj.values.length * 8 // Vec<f64>: u32 count + count*8
+        + 4 // Vec<String>: u32 count
+        + tagBytes.reduce(function(acc, b) { return acc + 4 + b.length; }, 0) // each string: u32 len + bytes
+        + 1; // bool
+      var buf = new ArrayBuffer(size);
+      var dv = new DataView(buf);
+      var u8 = new Uint8Array(buf);
+      var off = 0;
+      // u64 id
+      dv.setUint32(off, obj.id & 0xFFFFFFFF, true); off += 4;
+      dv.setUint32(off, Math.floor(obj.id / 0x100000000), true); off += 4;
+      // String name
+      dv.setUint32(off, nameBytes.length, true); off += 4;
+      u8.set(nameBytes, off); off += nameBytes.length;
+      // Vec<f64> values
+      dv.setUint32(off, obj.values.length, true); off += 4;
+      for (var i = 0; i < obj.values.length; i++) {
+        dv.setFloat64(off, obj.values[i], true); off += 8;
+      }
+      // Vec<String> tags
+      dv.setUint32(off, obj.tags.length, true); off += 4;
+      for (var i = 0; i < obj.tags.length; i++) {
+        var tb = tagBytes[i];
+        dv.setUint32(off, tb.length, true); off += 4;
+        u8.set(tb, off); off += tb.length;
+      }
+      // bool active
+      dv.setUint8(off, obj.active ? 1 : 0);
+      return u8;
+    }
+
+    function decodeMedium(bytes) {
+      var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      var off = 0;
+      // u64 id
+      var idLo = dv.getUint32(off, true); off += 4;
+      var idHi = dv.getUint32(off, true); off += 4;
+      var id = idHi * 0x100000000 + idLo;
+      // String name
+      var nameLen = dv.getUint32(off, true); off += 4;
+      var name = new TextDecoder().decode(bytes.subarray(off, off + nameLen)); off += nameLen;
+      // Vec<f64> values
+      var valCount = dv.getUint32(off, true); off += 4;
+      var values = [];
+      for (var i = 0; i < valCount; i++) {
+        values.push(dv.getFloat64(off, true)); off += 8;
+      }
+      // Vec<String> tags
+      var tagCount = dv.getUint32(off, true); off += 4;
+      var tags = [];
+      for (var i = 0; i < tagCount; i++) {
+        var tl = dv.getUint32(off, true); off += 4;
+        tags.push(new TextDecoder().decode(bytes.subarray(off, off + tl))); off += tl;
+      }
+      // bool active
+      var active = dv.getUint8(off) === 1;
+      return { id: id, name: name, values: values, tags: tags, active: active };
+    }
+
     // ── Payloads ──────────────────────────────────────────────────
     var SMALL = { timestamp: 1710000000000, price: 42567.89, volume: 1.23456, side: 1 };
 
@@ -173,6 +239,7 @@
 
     // Pre-encode binary payloads (encode cost is not part of the Rust benchmark)
     var SMALL_BIN = encodeSmall(SMALL);
+    var MEDIUM_BIN = encodeMedium(MEDIUM);
     var LARGE_BIN = encodeLarge({ header: 12345678, data: new Uint8Array(LARGE_DATA_ARRAY), checksum: 3141592653 });
 
     // ── Benchmark engine ──────────────────────────────────────────
@@ -255,12 +322,14 @@
         var l2Small = await bench('l2-small', function() { return conduitInvokeBinary('binary_echo_small', SMALL_BIN); });
         rows.push(addRow('25B payload', tauriSmall, l1Small, l2Small));
 
-        // --- ~1KB payload (no L2 — Vec<f64>/Vec<String> not binary-encodable) ---
+        // --- ~1KB payload ---
         setStatus('Benchmarking ~1KB \u2014 Tauri...', 'running');
         var tauriMed = await bench('tauri-med', function() { return tauriInvoke('tauri_echo_medium', { payload: MEDIUM }); });
         setStatus('Benchmarking ~1KB \u2014 Conduit L1 (JSON)...', 'running');
         var l1Med = await bench('l1-med', function() { return conduitInvokeJSON('conduit_echo_medium', { payload: MEDIUM }); });
-        rows.push(addRow('~1KB payload', tauriMed, l1Med, null));
+        setStatus('Benchmarking ~1KB \u2014 Conduit L2 (binary)...', 'running');
+        var l2Med = await bench('l2-med', function() { return conduitInvokeBinary('binary_echo_medium', MEDIUM_BIN); });
+        rows.push(addRow('~1KB payload', tauriMed, l1Med, l2Med));
 
         // --- ~64KB payload ---
         setStatus('Benchmarking ~64KB \u2014 Tauri...', 'running');

@@ -260,36 +260,42 @@ impl Decode for bool {
     }
 }
 
-// Vec<u8>: 4-byte LE length prefix followed by raw bytes.
-impl Encode for Vec<u8> {
+// Vec<T>: 4-byte LE element count followed by each element encoded in sequence.
+// For Vec<u8>, this produces the same wire format as a length-prefixed byte blob
+// (count + N individual bytes = count + N raw bytes).
+impl<T: Encode> Encode for Vec<T> {
     fn encode(&self, buf: &mut Vec<u8>) {
-        let len: u32 = self.len().try_into().unwrap_or_else(|_| {
+        let count: u32 = self.len().try_into().unwrap_or_else(|_| {
             panic!(
-                "conduit: payload too large ({} bytes exceeds u32::MAX)",
+                "conduit: vec too large ({} elements exceeds u32::MAX)",
                 self.len()
             )
         });
-        buf.extend_from_slice(&len.to_le_bytes());
-        buf.extend_from_slice(self);
+        buf.extend_from_slice(&count.to_le_bytes());
+        for item in self {
+            item.encode(buf);
+        }
     }
 
     fn encode_size(&self) -> usize {
-        4 + self.len()
+        4 + self.iter().map(|item| item.encode_size()).sum::<usize>()
     }
 }
 
-impl Decode for Vec<u8> {
+impl<T: Decode> Decode for Vec<T> {
     fn decode(data: &[u8]) -> Option<(Self, usize)> {
         if data.len() < 4 {
             return None;
         }
-        let len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        // Length cannot exceed remaining buffer
-        if len > data.len() - 4 {
-            return None;
+        let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let mut off = 4;
+        let mut items = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (item, consumed) = T::decode(&data[off..])?;
+            off += consumed;
+            items.push(item);
         }
-        let total = 4 + len;
-        Some((data[4..total].to_vec(), total))
+        Some((items, off))
     }
 }
 
