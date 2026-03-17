@@ -6,9 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
-**Binary IPC for Tauri v2 via `conduit://` custom protocol.**
-
-Replaces Tauri's JSON-over-webview IPC with an in-process custom protocol. Level 1 (JSON, drop-in compatible) measures ~2.1-2.8x faster Rust-side dispatch. Level 2 (binary) measures up to ~500x faster Rust-side dispatch on 64 KB payloads.
+**Drop-in replacement for Tauri's invoke(). One import change, zero config. Binary IPC under the hood.**
 
 ```diff
 - import { invoke } from '@tauri-apps/api/core';
@@ -19,98 +17,35 @@ Replaces Tauri's JSON-over-webview IPC with an in-process custom protocol. Level
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph Frontend["Frontend (Webview)"]
-        INV["invoke()  — JSON, drop-in"]
-        BIN["invokeBinary()  — raw bytes"]
-        SUB["subscribe() / drain()"]
-    end
-
-    subgraph Protocol["conduit:// Custom Protocol  (in-process)"]
-        AUTH["Auth key validation"]
-        ROUTE["Router"]
-    end
-
-    subgraph Backend["Backend (Rust)"]
-        CMD["Command handlers"]
-        RB["Ring Buffer"]
-    end
-
-    INV -- "fetch conduit://invoke/" --> AUTH
-    BIN -- "fetch conduit://invoke/" --> AUTH
-    AUTH --> ROUTE
-    ROUTE --> CMD
-    CMD --> ROUTE
-    RB -- "conduit:data-available event" --> SUB
-    SUB -- "fetch conduit://drain/" --> RB
-    CMD -. "push()" .-> RB
-
-    style Protocol fill:#1e293b,stroke:#475569,color:#f8fafc
-    style AUTH fill:#ef4444,stroke:#dc2626,color:#fff
-    style ROUTE fill:#3b82f6,stroke:#2563eb,color:#fff
-    style RB fill:#f59e0b,stroke:#d97706,color:#000
-```
+<img src="docs/images/architecture.png" alt="tauri-conduit architecture" width="100%">
 
 ---
 
-## When this is useful
+## Performance
 
-For apps where IPC is not on the critical path (button clicks, form submissions, occasional data fetches), Tauri's built-in `invoke()` is sufficient.
+All numbers are **Rust dispatch layer only** (excludes WebView bridge, `fetch()`, JS parsing). See [BENCHMARKS.md](BENCHMARKS.md) for full methodology.
 
-conduit targets apps where IPC throughput matters: streaming real-time data, processing binary buffers per-frame, or ingesting high-frequency telemetry. In these cases, the serialization and bridge overhead becomes measurable.
+<img src="docs/images/payload-scaling.png" alt="Tauri invoke vs conduit — roundtrip latency by payload size" width="100%">
 
-## Two levels of optimization
-
-conduit provides two optimization tiers. Level 1 is a drop-in replacement. Level 2 eliminates JSON entirely.
-
-> **All numbers are Rust dispatch layer only** -- excludes WebView bridge, `fetch()`, and JS parsing overhead. See [BENCHMARKS.md](BENCHMARKS.md) for methodology and full results.
-
-### Level 1: Drop-in replacement -- ~2-3x faster Rust-side dispatch
-
-`invoke()` is API-compatible with Tauri's built-in invoke. It still uses JSON for argument encoding, but routes through conduit's in-process custom protocol and deserializes directly to the target type (skipping the intermediate `serde_json::Value` conversion). conduit uses sonic-rs for JSON deserialization at both Level 1 and Level 2, while Tauri uses serde_json with an intermediate `Value` step.
-
-```typescript
-import { invoke } from 'tauri-plugin-conduit';
-
-// Same API as Tauri's invoke()
-const result = await invoke('get_ticks', { symbol: 'AAPL' });
-```
-
-| Payload | Tauri invoke | conduit invoke | Improvement |
+| Payload | Tauri invoke | conduit L1 (JSON) | conduit L2 (binary) |
 |---|---|---|---|
-| 25B struct | 714 ns | 333 ns | **~2.1x faster Rust-side dispatch** |
-| 1 KB | 8.5 us | 7.6 us | **~1.1x faster Rust-side dispatch** |
-| 64 KB | 2.30 ms | 821 us | **~2.8x faster Rust-side dispatch** |
+| 25B struct | 722 ns | 330 ns (**2.2x**) | 80 ns (**9x**) |
+| ~1 KB | 8.1 µs | 7.6 µs (**1.1x**) | 1.0 µs (**8x**) |
+| 64 KB | 2.27 ms | 834 µs (**2.7x**) | 202 µs (**11x**) |
 
-### Level 2: Binary mode -- up to ~500x faster Rust-side dispatch
+### Why L1 barely wins at 1 KB
 
-`invokeBinary()` eliminates JSON entirely -- raw bytes in, raw bytes out. Binary passthrough -- no JSON parsing. The improvement scales with payload size.
+<img src="docs/images/bottleneck-breakdown.png" alt="Where does the time go? — Tauri invoke latency breakdown" width="100%">
 
-```typescript
-import { connect } from 'tauri-plugin-conduit';
+At small payloads (25B), WebView transport overhead is 54% of total cost — conduit eliminates that and wins 2.2x. At 1 KB, JSON serialization is 82% of cost — transport is only 6%, so L1 (which still uses JSON) barely wins. L2 binary skips JSON entirely and delivers 8-11x regardless of payload size.
 
-const conduit = await connect();
-const buf = await conduit.invokeBinary('raw_data', new Uint8Array([1, 2, 3]));
-```
+> Measured with [criterion](https://bheisler.github.io/criterion.rs/) on Intel i7-10700KF @ 3.80 GHz. Run `cd crates/conduit-core && cargo bench -- comparison` to see numbers on your hardware.
 
-| Payload | Tauri invoke | conduit binary | Improvement |
-|---|---|---|---|
-| 25B struct | 714 ns | 78 ns | **~9x faster Rust-side dispatch** |
-| 1 KB | 8.5 us | 991 ns | **~8.6x faster Rust-side dispatch** |
-| 64 KB | 2.30 ms | 4.6 us | **~500x faster Rust-side dispatch** |
+### Two levels of optimization
 
-### The full picture
+**Level 1 (drop-in)** — `invoke()` is API-compatible with Tauri's built-in invoke. Still uses JSON, but routes through conduit's in-process custom protocol and uses [sonic-rs](https://github.com/cloudwego/sonic-rs) (SIMD-accelerated) to deserialize directly to the target type in one step, skipping serde_json's intermediate `Value` conversion.
 
-All three paths side by side.
-
-| Payload | Tauri invoke | Level 1 (drop-in) | Level 2 (binary) |
-|---|---|---|---|
-| 25B struct | 714 ns | 333 ns (~2.1x) | 78 ns (~9x) |
-| 1 KB | 8.5 us | 7.6 us (~1.1x) | 991 ns (~8.6x) |
-| 64 KB | 2.30 ms | 821 us (~2.8x) | 4.6 us (~500x) |
-
-> Measured with criterion on the Rust dispatch layer. The 1KB payload uses a complex mixed type (nested strings, float arrays); simpler payloads see larger improvements. Run `cd crates/conduit-core && cargo bench -- comparison` to see numbers on your hardware.
+**Level 2 (binary)** — `invokeBinary()` eliminates JSON entirely. Raw bytes in, raw bytes out. Use `#[derive(Encode, Decode)]` for typed binary structs, or pass raw `Uint8Array` for full control.
 
 ## Getting Started
 
@@ -231,12 +166,10 @@ const buf = await drain('telemetry');
 
 Under the hood, Rust writes frames into a ring buffer and emits a `conduit:data-available` event. The JS client listens for the event and fetches data through the custom protocol. Behavior when the buffer is full depends on the channel type: lossy channels drop the oldest frames; ordered channels return an error to the producer.
 
-> **v2.1.0 performance:** Both `RingBuffer` and `Queue` now use a preformatted wire buffer internally -- frames are stored in drain-ready format, so `drain_all` is a single `memcpy` instead of per-frame serialization. On the JS side, `parseDrainBlob` returns zero-copy `Uint8Array` views, and the `WireWriter` builder class enables single-allocation binary encoding.
-
 ```mermaid
 flowchart LR
     subgraph Rust
-        P["Any thread"] -- "push(channel, bytes)" --> RB["Ring Buffer"]
+        P["Any thread"] -- "push(channel, bytes)" --> RB["Wire Buffer"]
         RB -- "emits" --> EV["conduit:data-available"]
     end
 
