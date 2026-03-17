@@ -17,7 +17,12 @@ export const DEFAULT_TIMEOUT_MS = 10_000;
 const EMPTY_BODY = new Uint8Array(0);
 
 export interface ProtocolTransport {
-  invoke(cmd: string, payload?: Uint8Array, timeoutMs?: number, extraHeaders?: Record<string, string>): Promise<ArrayBuffer>;
+  invoke(
+    cmd: string,
+    payload?: Uint8Array | string,
+    timeoutMs?: number,
+    extraHeaders?: Record<string, string>,
+  ): Promise<ArrayBuffer>;
 }
 
 /**
@@ -33,7 +38,7 @@ export function createProtocolTransport(
   return {
     async invoke(
       cmd: string,
-      payload?: Uint8Array,
+      payload?: Uint8Array | string,
       timeoutMs: number = DEFAULT_TIMEOUT_MS,
       extraHeaders?: Record<string, string>,
     ): Promise<ArrayBuffer> {

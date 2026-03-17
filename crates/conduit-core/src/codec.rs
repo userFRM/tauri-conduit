@@ -199,6 +199,13 @@ pub trait Encode {
 /// Returns the decoded value together with the number of bytes consumed,
 /// or `None` if the data is too short or malformed.
 pub trait Decode: Sized {
+    /// Minimum number of bytes required to attempt decoding this type.
+    ///
+    /// For fixed-size types (primitives), this equals the exact encoded size.
+    /// For variable-size types (String, Vec), this is the minimum (the length
+    /// prefix size). Used by derived impls for an upfront bounds check.
+    const MIN_SIZE: usize = 0;
+
     /// Attempt to decode from the start of `data`.
     fn decode(data: &[u8]) -> Option<(Self, usize)>;
 }
@@ -221,6 +228,8 @@ macro_rules! impl_wire_int {
             }
 
             impl Decode for $ty {
+                const MIN_SIZE: usize = std::mem::size_of::<$ty>();
+
                 fn decode(data: &[u8]) -> Option<(Self, usize)> {
                     const SIZE: usize = std::mem::size_of::<$ty>();
                     if data.len() < SIZE {
@@ -248,6 +257,8 @@ impl Encode for bool {
 }
 
 impl Decode for bool {
+    const MIN_SIZE: usize = 1;
+
     fn decode(data: &[u8]) -> Option<(Self, usize)> {
         if data.is_empty() {
             return None;
@@ -283,6 +294,8 @@ impl<T: Encode> Encode for Vec<T> {
 }
 
 impl<T: Decode> Decode for Vec<T> {
+    const MIN_SIZE: usize = 4;
+
     fn decode(data: &[u8]) -> Option<(Self, usize)> {
         if data.len() < 4 {
             return None;
@@ -318,6 +331,8 @@ impl Encode for String {
 }
 
 impl Decode for String {
+    const MIN_SIZE: usize = 4;
+
     fn decode(data: &[u8]) -> Option<(Self, usize)> {
         if data.len() < 4 {
             return None;
@@ -330,6 +345,78 @@ impl Decode for String {
         let total = 4 + len;
         let s = std::str::from_utf8(&data[4..total]).ok()?;
         Some((s.to_owned(), total))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bytes: optimized Vec<u8> wrapper with bulk encode/decode
+// ---------------------------------------------------------------------------
+
+/// A newtype wrapper around `Vec<u8>` with optimized binary Encode/Decode.
+///
+/// Unlike `Vec<u8>` which goes through the generic `Vec<T>` impl (decoding
+/// each byte individually), `Bytes` uses a single bulk copy for both encoding
+/// and decoding.
+///
+/// The wire format is identical to `Vec<u8>`: `[u32 LE count][bytes...]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct Bytes(pub Vec<u8>);
+
+impl From<Vec<u8>> for Bytes {
+    fn from(v: Vec<u8>) -> Self {
+        Self(v)
+    }
+}
+
+impl From<Bytes> for Vec<u8> {
+    fn from(b: Bytes) -> Self {
+        b.0
+    }
+}
+
+impl std::ops::Deref for Bytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for Bytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Encode for Bytes {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        let count: u32 = self.0.len().try_into().unwrap_or_else(|_| {
+            panic!(
+                "conduit: bytes too large ({} bytes exceeds u32::MAX)",
+                self.0.len()
+            )
+        });
+        buf.extend_from_slice(&count.to_le_bytes());
+        buf.extend_from_slice(&self.0);
+    }
+
+    fn encode_size(&self) -> usize {
+        4 + self.0.len()
+    }
+}
+
+impl Decode for Bytes {
+    const MIN_SIZE: usize = 4;
+
+    fn decode(data: &[u8]) -> Option<(Self, usize)> {
+        if data.len() < 4 {
+            return None;
+        }
+        let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let total = 4usize.checked_add(count)?;
+        if data.len() < total {
+            return None;
+        }
+        Some((Bytes(data[4..total].to_vec()), total))
     }
 }
 
@@ -446,5 +533,63 @@ mod tests {
         let (decoded, consumed) = String::decode(&buf).unwrap();
         assert_eq!(decoded, original);
         assert_eq!(consumed, 4 + original.len());
+    }
+
+    #[test]
+    fn encode_decode_bytes() {
+        let original = Bytes(vec![10, 20, 30, 40, 50]);
+        let mut buf = Vec::new();
+        original.encode(&mut buf);
+        assert_eq!(original.encode_size(), buf.len());
+        let (decoded, consumed) = Bytes::decode(&buf).unwrap();
+        assert_eq!(decoded, original);
+        assert_eq!(consumed, buf.len());
+    }
+
+    #[test]
+    fn bytes_empty() {
+        let original = Bytes(Vec::new());
+        let mut buf = Vec::new();
+        original.encode(&mut buf);
+        assert_eq!(buf.len(), 4); // just the count
+        let (decoded, consumed) = Bytes::decode(&buf).unwrap();
+        assert_eq!(decoded.0.len(), 0);
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn bytes_wire_compatible_with_vec_u8() {
+        // Verify Bytes and Vec<u8> produce identical wire format
+        let data: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let bytes = Bytes(data.clone());
+
+        let mut buf_vec = Vec::new();
+        data.encode(&mut buf_vec);
+
+        let mut buf_bytes = Vec::new();
+        bytes.encode(&mut buf_bytes);
+
+        assert_eq!(
+            buf_vec, buf_bytes,
+            "Bytes and Vec<u8> must produce identical wire format"
+        );
+    }
+
+    #[test]
+    fn min_size_primitives() {
+        assert_eq!(<u8 as Decode>::MIN_SIZE, 1);
+        assert_eq!(<u16 as Decode>::MIN_SIZE, 2);
+        assert_eq!(<u32 as Decode>::MIN_SIZE, 4);
+        assert_eq!(<u64 as Decode>::MIN_SIZE, 8);
+        assert_eq!(<i8 as Decode>::MIN_SIZE, 1);
+        assert_eq!(<i16 as Decode>::MIN_SIZE, 2);
+        assert_eq!(<i32 as Decode>::MIN_SIZE, 4);
+        assert_eq!(<i64 as Decode>::MIN_SIZE, 8);
+        assert_eq!(<f32 as Decode>::MIN_SIZE, 4);
+        assert_eq!(<f64 as Decode>::MIN_SIZE, 8);
+        assert_eq!(<bool as Decode>::MIN_SIZE, 1);
+        assert_eq!(<String as Decode>::MIN_SIZE, 4);
+        assert_eq!(<Vec<u8> as Decode>::MIN_SIZE, 4);
+        assert_eq!(<Bytes as Decode>::MIN_SIZE, 4);
     }
 }

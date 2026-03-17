@@ -734,3 +734,28 @@ async fn original_async_result_function_preserved() {
         "division by zero"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 17. MIN_SIZE on derived structs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn min_size_derived_structs() {
+    // SimplePrimitives: u8(1) + u32(4) + i64(8) + f64(8) + bool(1) = 22
+    assert_eq!(<SimplePrimitives as Decode>::MIN_SIZE, 22);
+
+    // VarLength: Vec<u8> prefix(4) + String prefix(4) = 8
+    assert_eq!(<VarLength as Decode>::MIN_SIZE, 8);
+
+    // Empty: 0
+    assert_eq!(<Empty as Decode>::MIN_SIZE, 0);
+
+    // SingleField: u32(4) = 4
+    assert_eq!(<SingleField as Decode>::MIN_SIZE, 4);
+
+    // Alpha: u16(2) + u16(2) = 4
+    assert_eq!(<Alpha as Decode>::MIN_SIZE, 4);
+
+    // Beta: bool(1) + String prefix(4) = 5
+    assert_eq!(<Beta as Decode>::MIN_SIZE, 5);
+}

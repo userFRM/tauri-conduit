@@ -25,7 +25,7 @@ pub mod router;
 
 pub use channel::ChannelBuffer;
 pub use codec::{
-    DRAIN_FRAME_OVERHEAD, Decode, Encode, FRAME_HEADER_SIZE, FrameHeader, MsgType,
+    Bytes, DRAIN_FRAME_OVERHEAD, Decode, Encode, FRAME_HEADER_SIZE, FrameHeader, MsgType,
     PROTOCOL_VERSION, frame_pack, frame_unpack,
 };
 pub use error::Error;
