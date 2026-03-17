@@ -151,10 +151,15 @@ fn impl_encode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
 /// Generate the `Decode` impl: decodes each named field in declaration
 /// order, tracking the cumulative byte offset through the input slice.
+///
+/// Also emits a `MIN_SIZE` constant (sum of each field's `MIN_SIZE`) and
+/// an upfront bounds check that short-circuits before any per-field work.
 fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     reject_generics(input)?;
     let name = &input.ident;
     let fields = named_fields(input)?;
+
+    let field_types: Vec<_> = fields.named.iter().map(|f| &f.ty).collect();
 
     let decode_stmts: Vec<_> = fields
         .named
@@ -177,9 +182,22 @@ fn impl_decode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         .map(|f| f.ident.as_ref().unwrap())
         .collect();
 
+    // Build MIN_SIZE as sum of field MIN_SIZEs
+    let min_size_expr = if field_types.is_empty() {
+        quote! { 0 }
+    } else {
+        let tys = &field_types;
+        quote! { 0 #(+ <#tys as ::conduit_core::Decode>::MIN_SIZE)* }
+    };
+
     Ok(quote! {
         impl ::conduit_core::Decode for #name {
+            const MIN_SIZE: usize = #min_size_expr;
+
             fn decode(__cdec_src__: &[u8]) -> Option<(Self, usize)> {
+                if __cdec_src__.len() < Self::MIN_SIZE {
+                    return None;
+                }
                 let mut __cdec_off__ = 0usize;
                 #(#decode_stmts)*
                 Some((Self { #(#field_names),* }, __cdec_off__))

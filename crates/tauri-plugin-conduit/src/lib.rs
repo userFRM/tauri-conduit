@@ -69,6 +69,7 @@ use std::sync::Arc;
 use conduit_core::{
     ChannelBuffer, ConduitHandler, Decode, Encode, HandlerResponse, Queue, RingBuffer, Router,
 };
+use futures_util::FutureExt;
 use subtle::ConstantTimeEq;
 use tauri::plugin::{Builder as TauriPluginBuilder, TauriPlugin};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -162,6 +163,8 @@ pub struct PluginState<R: Runtime> {
     channels: HashMap<String, Arc<ChannelBuffer>>,
     /// Tauri app handle for emitting events to the frontend.
     app_handle: AppHandle<R>,
+    /// Pre-cached `Arc` of the app handle — avoids a heap allocation per request.
+    app_handle_arc: Arc<AppHandle<R>>,
     /// Per-launch invoke key (hex-encoded, 64 hex chars = 32 bytes).
     invoke_key: String,
     /// Raw invoke key bytes for constant-time comparison.
@@ -643,19 +646,8 @@ impl PluginBuilder {
                 // Extract the managed PluginState from the app handle.
                 let state: tauri::State<'_, PluginState<R>> = ctx.app_handle().state();
 
-                let url = request.uri().to_string();
-
-                // Extract path from URL: conduit://localhost/{action}/{target}
-                // Use simple string splitting instead of full URL parsing —
-                // the format is fixed and under our control.
-                let path = url
-                    .find("://")
-                    .and_then(|i| url[i + 3..].find('/'))
-                    .map(|i| {
-                        let host_end = url.find("://").unwrap() + 3;
-                        &url[host_end + i..]
-                    })
-                    .unwrap_or("/");
+                // Extract path directly from the URI — zero allocation.
+                let path = request.uri().path();
                 let segments: Vec<&str> = path.trim_start_matches('/').splitn(2, '/').collect();
 
                 if segments.len() != 2 {
@@ -667,9 +659,10 @@ impl PluginBuilder {
                 }
 
                 // Validate the invoke key from the X-Conduit-Key header.
+                // Borrow the header value directly — no allocation needed.
                 let key = match request.headers().get("X-Conduit-Key") {
                     Some(v) => match v.to_str() {
-                        Ok(s) => s.to_string(),
+                        Ok(s) => s,
                         Err(_) => {
                             responder
                                 .respond(make_error_response(401, "invalid invoke key header"));
@@ -682,7 +675,7 @@ impl PluginBuilder {
                     }
                 };
 
-                if !state.validate_invoke_key(&key) {
+                if !state.validate_invoke_key(key) {
                     responder.respond(make_error_response(403, "invalid invoke key"));
                     return;
                 }
@@ -702,9 +695,8 @@ impl PluginBuilder {
                         let body = request.body().to_vec();
 
                         // 1) Check #[command]-generated handlers first (sync or async)
-                        if let Some(handler) = state.handlers.get(&target) {
+                        if let Some(handler) = state.handlers.get(&*target) {
                             let handler = Arc::clone(handler);
-                            let app_handle = ctx.app_handle().clone();
                             // Extract webview label from X-Conduit-Webview header (sent by JS client).
                             // NOTE: This header is client-provided and could be spoofed by JS
                             // running in the same webview. We validate the format to prevent
@@ -723,8 +715,12 @@ impl PluginBuilder {
                                         })
                                 })
                                 .map(|s| s.to_string());
+                            // Clone the pre-cached Arc and coerce to trait object —
+                            // one atomic increment, no heap allocation.
+                            let app_handle_arc: Arc<dyn std::any::Any + Send + Sync> =
+                                state.app_handle_arc.clone();
                             let handler_ctx = conduit_core::HandlerContext::new(
-                                Arc::new(app_handle),
+                                app_handle_arc,
                                 webview_label,
                             );
                             let ctx_any: Arc<dyn std::any::Any + Send + Sync> =
@@ -756,12 +752,12 @@ impl PluginBuilder {
                                 }
                                 Ok(HandlerResponse::Async(future)) => {
                                     // Truly async — spawned on tokio, just like #[tauri::command].
-                                    // Inner spawn provides panic isolation: if the future panics
-                                    // during execution, the JoinHandle catches it and we respond
-                                    // with a 500 instead of leaving the request hanging.
+                                    // Single spawn with catch_unwind for panic isolation.
                                     tauri::async_runtime::spawn(async move {
-                                        let handle = tauri::async_runtime::spawn(future);
-                                        match handle.await {
+                                        let result = std::panic::AssertUnwindSafe(future)
+                                            .catch_unwind()
+                                            .await;
+                                        match result {
                                             Ok(Ok(bytes)) => {
                                                 responder.respond(make_response(
                                                     200,
@@ -794,17 +790,18 @@ impl PluginBuilder {
                         } else {
                             // 2) Fall back to legacy sync Router
                             let dispatch = Arc::clone(&state.dispatch);
-                            let app_handle = ctx.app_handle().clone();
+                            // Use the app_handle reference from state — no clone needed.
+                            let app_handle_ref = &state.app_handle;
                             // SAFETY: AssertUnwindSafe is used here because:
                             // - `body` is a Vec<u8> (unwind-safe by itself)
                             // - `dispatch` is an Arc<Router> (unwind-safe)
-                            // - `app_handle` is a cloned AppHandle (unwind-safe)
+                            // - `app_handle_ref` borrows from Tauri state (unwind-safe)
                             // - conduit's own locks use poison-recovery helpers (lock_or_recover)
                             // - User-defined handler state may be left inconsistent after panic,
                             //   but this is inherent to catch_unwind and documented as a limitation.
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    dispatch.call_with_context(&target, body, &app_handle)
+                                    dispatch.call_with_context(&target, body, app_handle_ref)
                                 }));
                             match result {
                                 Ok(Ok(bytes)) => {
@@ -893,12 +890,14 @@ impl PluginBuilder {
 
                 // Obtain the app handle for emitting events.
                 let app_handle = app.app_handle().clone();
+                let app_handle_arc = Arc::new(app_handle.clone());
 
                 let state = PluginState {
                     dispatch,
                     handlers,
                     channels,
                     app_handle,
+                    app_handle_arc,
                     invoke_key,
                     invoke_key_bytes,
                 };
@@ -1007,10 +1006,13 @@ fn sanitize_error(e: &conduit_core::Error) -> String {
 
 /// Percent-decode a URL path segment (e.g., `hello%20world` → `hello world`).
 ///
-/// This is a minimal implementation — no new dependency needed. Only `%XX`
-/// sequences with valid hex digits are decoded; all other bytes pass through
-/// unchanged.
-fn percent_decode(input: &str) -> String {
+/// Returns `Cow::Borrowed` when no percent-encoding is present (the common
+/// case), avoiding a heap allocation entirely.
+fn percent_decode(input: &str) -> std::borrow::Cow<'_, str> {
+    // Fast path: no percent-encoded characters — return the input as-is.
+    if !input.as_bytes().contains(&b'%') {
+        return std::borrow::Cow::Borrowed(input);
+    }
     let mut result = Vec::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
@@ -1025,7 +1027,7 @@ fn percent_decode(input: &str) -> String {
         result.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&result).into_owned()
+    std::borrow::Cow::Owned(String::from_utf8_lossy(&result).into_owned())
 }
 
 /// Convert a single ASCII hex character to its 4-bit numeric value.

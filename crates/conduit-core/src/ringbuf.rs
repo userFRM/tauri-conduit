@@ -22,7 +22,6 @@
 //! ...
 //! ```
 
-use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use crate::codec::DRAIN_FRAME_OVERHEAD;
@@ -39,10 +38,18 @@ const DEFAULT_CAPACITY: usize = 64 * 1024;
 // ---------------------------------------------------------------------------
 
 /// The unsynchronized interior of the ring buffer.
+///
+/// Frames are stored pre-formatted in wire layout: `[u32 LE len][bytes]` per
+/// frame, so that `drain_all()` can emit the entire payload with a single
+/// memcpy instead of N×2 `extend_from_slice` calls.
 struct Inner {
-    /// Buffered frames in FIFO order.
-    frames: VecDeque<Vec<u8>>,
-    /// Total bytes used: sum of (DRAIN_FRAME_OVERHEAD + frame.len()) for each frame.
+    /// Pre-formatted wire data: frames stored as [u32 LE len][bytes][u32 LE len][bytes]...
+    wire_data: Vec<u8>,
+    /// Number of frames currently stored.
+    frame_count: u32,
+    /// Start of live data in wire_data (frames before this offset have been evicted).
+    read_pos: usize,
+    /// Total bytes used for capacity accounting: sum of (DRAIN_FRAME_OVERHEAD + frame.len()).
     bytes_used: usize,
     /// Maximum byte budget.
     capacity: usize,
@@ -52,7 +59,9 @@ impl Inner {
     /// Create an empty inner buffer with the given byte budget.
     fn new(capacity: usize) -> Self {
         Self {
-            frames: VecDeque::new(),
+            wire_data: Vec::new(),
+            frame_count: 0,
+            read_pos: 0,
             bytes_used: 0,
             capacity,
         }
@@ -64,15 +73,21 @@ impl Inner {
         DRAIN_FRAME_OVERHEAD + frame.len()
     }
 
-    /// Drop the oldest frame, adjusting the byte counter. Returns `true` if
+    /// Drop the oldest frame by advancing `read_pos`. Returns `true` if
     /// a frame was actually removed.
     fn drop_oldest(&mut self) -> bool {
-        if let Some(old) = self.frames.pop_front() {
-            self.bytes_used -= Self::frame_cost(&old);
-            true
-        } else {
-            false
+        if self.frame_count == 0 {
+            return false;
         }
+        let len_bytes: [u8; 4] = self.wire_data[self.read_pos..self.read_pos + 4]
+            .try_into()
+            .unwrap();
+        let payload_len = u32::from_le_bytes(len_bytes) as usize;
+        let cost = DRAIN_FRAME_OVERHEAD + payload_len;
+        self.read_pos += cost;
+        self.frame_count -= 1;
+        self.bytes_used -= cost;
+        true
     }
 }
 
@@ -157,6 +172,14 @@ impl RingBuffer {
     /// the frame can never fit, instead of silently returning `0`.
     #[must_use]
     pub fn push_checked(&self, frame: &[u8]) -> PushOutcome {
+        // Guard: frame length must fit in u32 (wire format invariant) and
+        // frame_cost must not overflow usize (relevant on 32-bit targets).
+        if frame.len() > u32::MAX as usize
+            || DRAIN_FRAME_OVERHEAD.checked_add(frame.len()).is_none()
+        {
+            return PushOutcome::TooLarge;
+        }
+
         let cost = Inner::frame_cost(frame);
         let mut inner = crate::lock_or_recover(&self.inner);
 
@@ -173,7 +196,26 @@ impl RingBuffer {
             dropped += 1;
         }
 
-        inner.frames.push_back(frame.to_vec());
+        // Compact if read_pos is more than half the allocated buffer.
+        if inner.read_pos > 0 && inner.read_pos > inner.wire_data.len() / 2 {
+            let rp = inner.read_pos;
+            inner.wire_data.copy_within(rp.., 0);
+            let new_len = inner.wire_data.len() - rp;
+            inner.wire_data.truncate(new_len);
+            inner.read_pos = 0;
+        }
+
+        // Guard: frame count must fit in u32 (wire format uses u32 count header).
+        if inner.frame_count == u32::MAX {
+            return PushOutcome::TooLarge;
+        }
+
+        // Append frame in wire format: [u32 LE len][bytes].
+        inner
+            .wire_data
+            .extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        inner.wire_data.extend_from_slice(frame);
+        inner.frame_count += 1;
         inner.bytes_used += cost;
         PushOutcome::Accepted(dropped)
     }
@@ -193,32 +235,27 @@ impl RingBuffer {
     /// Returns an empty `Vec` if the buffer is empty.
     #[must_use]
     pub fn drain_all(&self) -> Vec<u8> {
-        // Swap the frames out under the lock, then serialize without contention.
-        let (mut frames, bytes_used) = {
+        // Take the pre-formatted wire data out under the lock, then prepend
+        // the frame count header without contention.
+        let (wire_data, read_pos, frame_count) = {
             let mut inner = crate::lock_or_recover(&self.inner);
-            if inner.frames.is_empty() {
+            if inner.frame_count == 0 {
                 return Vec::new();
             }
-            let frames = std::mem::take(&mut inner.frames);
-            let bytes_used = inner.bytes_used;
+            let wire_data = std::mem::take(&mut inner.wire_data);
+            let read_pos = inner.read_pos;
+            let frame_count = inner.frame_count;
+            inner.read_pos = 0;
+            inner.frame_count = 0;
             inner.bytes_used = 0;
-            (frames, bytes_used)
+            (wire_data, read_pos, frame_count)
         };
-        // Lock released — serialize without holding the mutex.
-        let output_size = 4usize.saturating_add(bytes_used);
+        // Lock released — build output with TWO extend_from_slice calls (was N×2).
+        let live_data = &wire_data[read_pos..];
+        let output_size = 4 + live_data.len();
         let mut buf = Vec::with_capacity(output_size);
-
-        // Frame count header.
-        let count = frames.len() as u32;
-        buf.extend_from_slice(&count.to_le_bytes());
-
-        // Each frame: [u32 LE len][bytes].
-        for frame in frames.make_contiguous() {
-            let len = frame.len() as u32;
-            buf.extend_from_slice(&len.to_le_bytes());
-            buf.extend_from_slice(frame);
-        }
-
+        buf.extend_from_slice(&frame_count.to_le_bytes());
+        buf.extend_from_slice(live_data);
         buf
     }
 
@@ -228,15 +265,33 @@ impl RingBuffer {
     #[must_use]
     pub fn try_pop(&self) -> Option<Vec<u8>> {
         let mut inner = crate::lock_or_recover(&self.inner);
-        let frame = inner.frames.pop_front()?;
-        inner.bytes_used -= Inner::frame_cost(&frame);
+        if inner.frame_count == 0 {
+            return None;
+        }
+        let len_bytes: [u8; 4] = inner.wire_data[inner.read_pos..inner.read_pos + 4]
+            .try_into()
+            .unwrap();
+        let payload_len = u32::from_le_bytes(len_bytes) as usize;
+        let payload_start = inner.read_pos + 4;
+        let frame = inner.wire_data[payload_start..payload_start + payload_len].to_vec();
+        let cost = DRAIN_FRAME_OVERHEAD + payload_len;
+        inner.read_pos += cost;
+        inner.frame_count -= 1;
+        inner.bytes_used -= cost;
+
+        // Compact when empty.
+        if inner.frame_count == 0 {
+            inner.wire_data.clear();
+            inner.read_pos = 0;
+        }
+
         Some(frame)
     }
 
     /// Number of frames currently buffered.
     #[must_use]
     pub fn frame_count(&self) -> usize {
-        crate::lock_or_recover(&self.inner).frames.len()
+        crate::lock_or_recover(&self.inner).frame_count as usize
     }
 
     /// Number of bytes currently used (including per-frame length prefixes).
@@ -254,7 +309,9 @@ impl RingBuffer {
     /// Clear all buffered frames.
     pub fn clear(&self) {
         let mut inner = crate::lock_or_recover(&self.inner);
-        inner.frames.clear();
+        inner.wire_data.clear();
+        inner.frame_count = 0;
+        inner.read_pos = 0;
         inner.bytes_used = 0;
     }
 }
@@ -263,7 +320,7 @@ impl std::fmt::Debug for RingBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let inner = crate::lock_or_recover(&self.inner);
         f.debug_struct("RingBuffer")
-            .field("frame_count", &inner.frames.len())
+            .field("frame_count", &inner.frame_count)
             .field("bytes_used", &inner.bytes_used)
             .field("capacity", &inner.capacity)
             .finish()

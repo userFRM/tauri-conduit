@@ -237,6 +237,11 @@ export function writeString(value: string): Uint8Array {
  * `[u32 LE len][bytes]` for each frame. An empty ArrayBuffer
  * (byteLength === 0) means no frames.
  *
+ * **Important**: Returned Uint8Array frames are views into the input
+ * ArrayBuffer, not copies. Do not modify the returned frames or the
+ * input buffer after parsing. If you need owned copies, call
+ * `frame.slice()` on individual frames.
+ *
  * Corresponds to the Rust `RingBuffer::drain_all()` / `Queue::drain_all()` output.
  */
 export function parseDrainBlob(buf: ArrayBuffer): Uint8Array[] {
@@ -251,8 +256,188 @@ export function parseDrainBlob(buf: ArrayBuffer): Uint8Array[] {
     const len = view.getUint32(offset, true);
     offset += 4;
     if (offset + len > buf.byteLength) throw new RangeError(`parseDrainBlob: truncated frame payload at index ${i}`);
-    frames.push(new Uint8Array(buf.slice(offset, offset + len)));
+    frames.push(new Uint8Array(buf, offset, len));
     offset += len;
   }
   return frames;
+}
+
+// ── WireWriter (buffered builder) ────────────────────────────────────
+
+/**
+ * Buffered binary writer that builds wire messages with a single allocation.
+ *
+ * Instead of creating a new ArrayBuffer per field (as the standalone write
+ * helpers do), WireWriter pre-allocates a buffer and writes sequentially.
+ * Call {@link finish} to get the final Uint8Array.
+ *
+ * The buffer auto-grows if capacity is exceeded.
+ *
+ * @example
+ * ```ts
+ * const w = new WireWriter(64);
+ * const payload = w
+ *   .writeU64LE(BigInt(Date.now()))
+ *   .writeF64LE(price)
+ *   .writeF64LE(volume)
+ *   .writeU8(side)
+ *   .finish();
+ * ```
+ */
+export class WireWriter {
+  private buf: ArrayBuffer;
+  private view: DataView;
+  private u8: Uint8Array;
+  private pos: number;
+
+  constructor(capacity: number = 256) {
+    const cap = Math.max(capacity, 1); // Prevent zero-capacity infinite loop in grow()
+    this.buf = new ArrayBuffer(cap);
+    this.view = new DataView(this.buf);
+    this.u8 = new Uint8Array(this.buf);
+    this.pos = 0;
+  }
+
+  private grow(needed: number): void {
+    if (this.pos + needed <= this.buf.byteLength) return;
+    let newCap = Math.max(this.buf.byteLength * 2, 1);
+    while (newCap < this.pos + needed) newCap *= 2;
+    const newBuf = new ArrayBuffer(newCap);
+    new Uint8Array(newBuf).set(this.u8.subarray(0, this.pos));
+    this.buf = newBuf;
+    this.view = new DataView(this.buf);
+    this.u8 = new Uint8Array(this.buf);
+  }
+
+  writeU8(value: number): this {
+    this.grow(1);
+    this.u8[this.pos] = value;
+    this.pos += 1;
+    return this;
+  }
+
+  writeU16LE(value: number): this {
+    this.grow(2);
+    this.view.setUint16(this.pos, value, true);
+    this.pos += 2;
+    return this;
+  }
+
+  writeU32LE(value: number): this {
+    this.grow(4);
+    this.view.setUint32(this.pos, value, true);
+    this.pos += 4;
+    return this;
+  }
+
+  writeU64LE(value: bigint): this {
+    this.grow(8);
+    this.view.setBigUint64(this.pos, value, true);
+    this.pos += 8;
+    return this;
+  }
+
+  writeI8(value: number): this {
+    this.grow(1);
+    this.view.setInt8(this.pos, value);
+    this.pos += 1;
+    return this;
+  }
+
+  writeI16LE(value: number): this {
+    this.grow(2);
+    this.view.setInt16(this.pos, value, true);
+    this.pos += 2;
+    return this;
+  }
+
+  writeI32LE(value: number): this {
+    this.grow(4);
+    this.view.setInt32(this.pos, value, true);
+    this.pos += 4;
+    return this;
+  }
+
+  writeI64LE(value: bigint): this {
+    this.grow(8);
+    this.view.setBigInt64(this.pos, value, true);
+    this.pos += 8;
+    return this;
+  }
+
+  writeF32LE(value: number): this {
+    this.grow(4);
+    this.view.setFloat32(this.pos, value, true);
+    this.pos += 4;
+    return this;
+  }
+
+  writeF64LE(value: number): this {
+    this.grow(8);
+    this.view.setFloat64(this.pos, value, true);
+    this.pos += 8;
+    return this;
+  }
+
+  writeBool(value: boolean): this {
+    this.grow(1);
+    this.u8[this.pos] = value ? 1 : 0;
+    this.pos += 1;
+    return this;
+  }
+
+  /** Write raw bytes without a length prefix. */
+  writeRaw(data: Uint8Array): this {
+    this.grow(data.byteLength);
+    this.u8.set(data, this.pos);
+    this.pos += data.byteLength;
+    return this;
+  }
+
+  /** Write a length-prefixed byte array: `[u32 LE length][bytes]`. */
+  writeBytes(data: Uint8Array): this {
+    if (data.byteLength > 0xFFFFFFFF) {
+      throw new RangeError(`writeBytes: length ${data.byteLength} exceeds u32 max`);
+    }
+    this.grow(4 + data.byteLength);
+    this.view.setUint32(this.pos, data.byteLength, true);
+    this.pos += 4;
+    this.u8.set(data, this.pos);
+    this.pos += data.byteLength;
+    return this;
+  }
+
+  /** Write a length-prefixed UTF-8 string: `[u32 LE byte_length][utf8 bytes]`. */
+  writeString(value: string): this {
+    const encoded = textEncoder.encode(value);
+    if (encoded.byteLength > 0xFFFFFFFF) {
+      throw new RangeError(`writeString: byte length ${encoded.byteLength} exceeds u32 max`);
+    }
+    this.grow(4 + encoded.byteLength);
+    this.view.setUint32(this.pos, encoded.byteLength, true);
+    this.pos += 4;
+    this.u8.set(encoded, this.pos);
+    this.pos += encoded.byteLength;
+    return this;
+  }
+
+  /** Number of bytes written so far. */
+  get length(): number {
+    return this.pos;
+  }
+
+  /** Return the written portion as a Uint8Array view into the internal buffer. */
+  finish(): Uint8Array {
+    return new Uint8Array(this.buf, 0, this.pos);
+  }
+
+  /** Return the written portion as an owned copy (safe to retain after reuse). */
+  finishCopy(): Uint8Array {
+    return new Uint8Array(this.buf.slice(0, this.pos));
+  }
+
+  /** Reset the writer position to reuse the buffer for a new message. */
+  reset(): void {
+    this.pos = 0;
+  }
 }

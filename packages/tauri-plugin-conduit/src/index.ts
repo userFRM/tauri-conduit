@@ -137,15 +137,13 @@ function buildConduit(
   }
 
   async function drainChannel(channel: string): Promise<ArrayBuffer> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30_000); // 30s default
     const url =
       `${bootstrapInfo.protocolBase}/drain/${encodeURIComponent(channel)}`;
     try {
       const response = await fetch(url, {
         method: 'GET',
         headers: _baseHeaders,
-        signal: controller.signal,
+        signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) {
         const errorBody = await response.text();
@@ -153,12 +151,10 @@ function buildConduit(
       }
       return response.arrayBuffer();
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
+      if (err instanceof DOMException && err.name === 'TimeoutError') {
         throw new ConduitError(408, channel, 'drain timed out');
       }
       throw err;
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 
@@ -209,7 +205,7 @@ function buildConduit(
       args?: Record<string, unknown>,
       options?: InvokeOptions,
     ): Promise<T> {
-      const payload = _encoder.encode(JSON.stringify(args ?? {}));
+      const payload = JSON.stringify(args ?? {});
 
       const extra = _baseHeaders['X-Conduit-Webview'] ? { 'X-Conduit-Webview': _baseHeaders['X-Conduit-Webview'] } : undefined;
       const raw = await protocol.invoke(cmd, payload, options?.timeout, extra);
