@@ -7,7 +7,7 @@
 
 Proc macros for [conduit-core](https://crates.io/crates/conduit-core): `#[derive(Encode, Decode)]`, `#[command]`, and `handler!()`.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.0.0).
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.1.0).
 
 ## Usage
 
@@ -26,7 +26,9 @@ struct MarketTick {
 // 25 bytes on the wire. No schema, no parsing.
 ```
 
-Supported field types: `u8`-`u64`, `i8`-`i64`, `f32`, `f64`, `bool`, `Vec<u8>`, `String`.
+Supported field types: `u8`-`u64`, `i8`-`i64`, `f32`, `f64`, `bool`, `Vec<u8>`, `String`, `Bytes`.
+
+The `Decode` derive automatically generates a `MIN_SIZE` constant for upfront bounds checking.
 
 ### Command handlers
 

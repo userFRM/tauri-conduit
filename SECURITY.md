@@ -30,6 +30,7 @@ tauri-conduit runs entirely in-process within a Tauri v2 application. There is n
 
 | Version | Supported |
 |---------|-----------|
-| 2.0.x   | Yes       |
+| 2.1.x   | Yes       |
+| 2.0.x   | Security fixes only |
 | 1.0.x   | Security fixes only |
 | 0.1.x   | No        |

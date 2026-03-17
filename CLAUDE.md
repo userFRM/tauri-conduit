@@ -18,8 +18,8 @@ crates/
       codec.rs               11-byte frame header, Encode/Decode traits
       error.rs               Error types
       router.rs              Router (synchronous command registry)
-      ringbuf.rs             In-process ring buffer for streaming
-      queue.rs               Bounded queue with guaranteed delivery
+      ringbuf.rs             In-process ring buffer for streaming (preformatted wire buffer)
+      queue.rs               Bounded queue with guaranteed delivery (preformatted wire buffer)
       channel.rs             ChannelBuffer enum (Lossy/Reliable)
       handler.rs             ConduitHandler trait, HandlerContext, HandlerResponse
     benches/
@@ -42,7 +42,7 @@ packages/
       negotiate.ts           Bootstrap (obtains invoke key + channel list)
       error.ts               ConduitError class
       codec/frame.ts         11-byte frame codec (JS mirror)
-      codec/wire.ts          Binary decode/encode helpers, parseDrainBlob
+      codec/wire.ts          Binary decode/encode helpers, parseDrainBlob, WireWriter
       transport/protocol.ts  Custom protocol transport (conduit://)
 ```
 
@@ -51,16 +51,18 @@ packages/
 | Type | Crate | Purpose |
 |---|---|---|
 | `Conduit` | TS client | Main client interface: `invoke()`, `invokeBinary()`, `subscribe()`, `drain()` |
+| `WireWriter` | TS client | Builder for single-allocation binary encoding (pre-calculates size, writes into one ArrayBuffer) |
 | `PluginState<R>` | tauri-plugin-conduit | Managed Tauri state: router, handler map, ring buffers, invoke key, app handle |
 | `PluginBuilder` | tauri-plugin-conduit | Builder: `.handler()`, `.handler_raw()`, `.command()`, `.channel()`, `.build()` |
 | `ConduitHandler` | conduit-core | Trait for sync/async handlers, implemented by `#[command]`-generated structs |
 | `HandlerResponse` | conduit-core | Enum: `Sync(Result<Vec<u8>, Error>)` or `Async(Pin<Box<dyn Future>>)` |
 | `Router` | conduit-core | Named synchronous command handlers (payload in, payload out) |
-| `RingBuffer` | conduit-core | Thread-safe circular buffer with lossy back-pressure |
+| `RingBuffer` | conduit-core | Thread-safe circular buffer with lossy back-pressure (preformatted wire buffer -- drain_all is single memcpy) |
 | `FrameHeader` | conduit-core | 11-byte frame header for all conduit messages |
-| `Encode` / `Decode` | conduit-core | Traits for binary serialization of fixed-layout structs |
+| `Encode` / `Decode` | conduit-core | Traits for binary serialization of fixed-layout structs. `Decode` has a `MIN_SIZE` constant for upfront bounds checking |
+| `Bytes` | conduit-core | Newtype for `Vec<u8>` with efficient bulk encode/decode (no per-element overhead) |
 | `PushOutcome` | conduit-core | Enum: `Accepted(usize)` or `TooLarge` (opt-in via `push_checked()`) |
-| `Queue` | conduit-core | Thread-safe bounded queue with guaranteed delivery (backpressure) |
+| `Queue` | conduit-core | Thread-safe bounded queue with guaranteed delivery (preformatted wire buffer -- drain_all is single memcpy) |
 | `ChannelBuffer` | conduit-core | Enum wrapping `RingBuffer` (Lossy) or `Queue` (Reliable) |
 | `Error` | conduit-core | Error types (`UnknownCommand`, `PayloadTooLarge`, `AuthFailed`, `Handler`, `Serialize`, `UnknownChannel`) |
 
@@ -72,7 +74,7 @@ packages/
 4. JS listens for global `conduit:data-available` event with payload filter, then calls `conduit.drain("telemetry")` to fetch binary blob via custom protocol
 5. Or: JS calls `drain()` directly for pull-based access (user controls timing)
 
-Two channel types: lossy `RingBuffer` (oldest frames dropped on overflow, default 64 KB) and reliable `Queue` (backpressure error when full, guaranteed delivery).
+Two channel types: lossy `RingBuffer` (oldest frames dropped on overflow, default 64 KB) and reliable `Queue` (backpressure error when full, guaranteed delivery). Both use a preformatted wire buffer internally -- frames are stored in drain-ready format so `drain_all` is a single `memcpy` instead of per-frame serialization.
 
 ## Frame format (11 bytes)
 
@@ -107,6 +109,8 @@ cd crates/conduit-core && cargo bench -- comparison  # Tauri vs Level 1 vs Level
 ## Dependency notes
 
 conduit-core re-exports `sonic_rs` and `serde` as `#[doc(hidden)]` items for use by generated code. Changing their major versions is a semver-breaking change for conduit-core, even though they are hidden from docs.
+
+tauri-plugin-conduit depends on `futures-util` for `FutureExt::catch_unwind` (single-spawn async handler pattern with panic isolation).
 
 ## Relationship to tauri-wire
 

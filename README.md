@@ -231,6 +231,8 @@ const buf = await drain('telemetry');
 
 Under the hood, Rust writes frames into a ring buffer and emits a `conduit:data-available` event. The JS client listens for the event and fetches data through the custom protocol. Behavior when the buffer is full depends on the channel type: lossy channels drop the oldest frames; ordered channels return an error to the producer.
 
+> **v2.1.0 performance:** Both `RingBuffer` and `Queue` now use a preformatted wire buffer internally -- frames are stored in drain-ready format, so `drain_all` is a single `memcpy` instead of per-frame serialization. On the JS side, `parseDrainBlob` returns zero-copy `Uint8Array` views, and the `WireWriter` builder class enables single-allocation binary encoding.
+
 ```mermaid
 flowchart LR
     subgraph Rust
@@ -328,7 +330,7 @@ struct MarketTick {
 // 25 bytes on the wire. No schema, no parsing.
 ```
 
-Supported types: `u8`-`u64`, `i8`-`i64`, `f32`, `f64`, `bool`, `Vec<u8>`, `String`.
+Supported types: `u8`-`u64`, `i8`-`i64`, `f32`, `f64`, `bool`, `Vec<u8>`, `String`, `Bytes` (newtype for efficient bulk `Vec<u8>` encode/decode).
 
 ## Security
 

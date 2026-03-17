@@ -1,6 +1,6 @@
 {
   "name": "tauri-plugin-conduit",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "High-performance binary IPC client for Tauri v2",
   "type": "module",
   "main": "dist/index.js",

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-03-17
+
+### Performance — Rust core (conduit-core)
+
+- **Preformatted wire buffer in RingBuffer & Queue** — `drain_all` now performs a single `memcpy` instead of N x 2 `extend_from_slice` calls. Internal storage changed from `VecDeque<Vec<u8>>` to a contiguous wire buffer that maintains frames in drain-ready format. Measured: **drain_all 2x faster** (4.2µs → 2.1µs at 100 frames), **3.2x faster** at 1000 frames (55µs → 17µs). Push throughput **1.8-2.5x faster** (eliminated per-frame heap allocation).
+- **`Bytes` newtype** for efficient bulk `Vec<u8>` encode/decode — avoids per-element encoding overhead for byte arrays.
+- **`MIN_SIZE` trait constant on `Decode`** — derive macro generates an upfront bounds check before field-by-field decoding, failing fast on undersized buffers.
+- **Overflow guards** — `u32` truncation check on frame length, `frame_count` capped at `u32::MAX`, `checked_add` for 32-bit safety in size calculations.
+
+### Performance — Plugin (tauri-plugin-conduit)
+
+- **Protocol handler allocation elimination** — uses `URI::path()` directly, borrows the invoke key instead of cloning, and `Cow` percent-decoding avoids allocation when the input is already valid UTF-8.
+- **Single-spawn async handlers** — replaced double-spawn pattern with `FutureExt::catch_unwind` from `futures-util`, reducing per-invocation overhead.
+- **Pre-cached `Arc<AppHandle>`** in `PluginState` — eliminates repeated `Arc::clone` from the app handle on every protocol request.
+
+### Performance — TypeScript client
+
+- **`parseDrainBlob` zero-copy** — returns `Uint8Array` subarray views into the original buffer instead of copying each frame.
+- **`WireWriter` builder class** — single-allocation encoding: pre-calculates total size, writes all fields into one `ArrayBuffer`, avoids intermediate allocations.
+- **`JSON.stringify` direct to fetch body** — skips redundant `TextEncoder` step; the browser handles string-to-UTF-8 natively.
+- **`AbortSignal.timeout` for drain** — replaces manual `AbortController` + `setTimeout` wiring with the built-in API.
+
 ## [2.0.0] - 2026-03-10
 
 ### Added

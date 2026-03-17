@@ -7,7 +7,7 @@
 
 Tauri v2 plugin for [conduit](https://github.com/userFRM/tauri-conduit) -- binary IPC over the `conduit://` custom protocol.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.0.0).
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.1.0).
 
 ## Usage
 

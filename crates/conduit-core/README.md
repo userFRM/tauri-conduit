@@ -7,15 +7,18 @@
 
 Binary IPC core for Tauri v2: codec, router, ring buffer, and ordered queue.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.0.0).
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.1.0).
 
 ## Features
 
 - **11-byte frame codec** with `Encode`/`Decode` traits for zero-parse binary serialization
+- **`Bytes` newtype** for efficient bulk `Vec<u8>` encode/decode
+- **`MIN_SIZE` constant** on `Decode` for upfront bounds checking (derived automatically)
 - **Synchronous router** for named command handlers (raw, JSON, and binary)
-- **In-process ring buffer** (`RingBuffer`) with lossy back-pressure for streaming
-- **Ordered queue** (`Queue`) with guaranteed delivery and backpressure
+- **In-process ring buffer** (`RingBuffer`) with lossy back-pressure and preformatted wire buffer (drain_all is single memcpy)
+- **Ordered queue** (`Queue`) with guaranteed delivery, backpressure, and preformatted wire buffer
 - **Channel abstraction** (`ChannelBuffer`) unifying lossy and ordered channels
+- **Overflow guards** -- u32 truncation checks, frame_count cap, checked_add for 32-bit safety
 
 ## Key Types
 
@@ -30,7 +33,8 @@ Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace 
 | `HandlerContext` | Context passed to handlers: app handle + optional webview label |
 | `PushOutcome` | Enum: `Accepted(usize)` or `TooLarge` — opt-in via `push_checked()` |
 | `FrameHeader` | 11-byte binary frame header for all conduit messages |
-| `Encode` / `Decode` | Traits for fixed-layout binary serialization |
+| `Encode` / `Decode` | Traits for fixed-layout binary serialization (`Decode` includes `MIN_SIZE` constant) |
+| `Bytes` | Newtype for `Vec<u8>` with efficient bulk encode/decode |
 | `Error` | Error types (`UnknownCommand`, `DecodeFailed`, `Serialize`, `UnknownChannel`, etc.) |
 
 ## Usage

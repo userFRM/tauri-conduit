@@ -45,7 +45,8 @@ const unsub = await subscribe('telemetry', (buf) => {
 - `drain(channel)` — pull-based ring buffer access (user controls timing)
 - `connect()` — explicit connection lifecycle, returns a `Conduit` instance
 - `resetConduit()` — force re-bootstrap (useful during development hot-reload)
-- `parseDrainBlob(buf)` — parse drain wire format into individual `Uint8Array` frames
+- `parseDrainBlob(buf)` — parse drain wire format into zero-copy `Uint8Array` subarray views
+- `WireWriter` — builder class for single-allocation binary encoding (pre-calculates total size, writes into one `ArrayBuffer`)
 - `ConduitError` — structured error with `status`, `target`, and `message` fields
 
 ## License

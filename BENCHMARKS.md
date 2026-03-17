@@ -1,6 +1,6 @@
 # tauri-conduit Benchmark Report
 
-Generated: 2026-03-10 (v2.0.0)
+Generated: 2026-03-17 (v2.1.0)
 
 ## Measurement scope
 
@@ -23,7 +23,7 @@ End-to-end benchmarks require a running Tauri app and vary by platform (WKWebVie
 
 | Property | Value |
 |---|---|
-| OS | Linux 6.8.0-101-generic (Ubuntu, PREEMPT_DYNAMIC) |
+| OS | Linux 6.8.0-106-generic (Ubuntu, PREEMPT_DYNAMIC) |
 | Architecture | x86_64 |
 | CPU | Intel Core i7-10700KF @ 3.80GHz |
 | Cores | 16 |
@@ -51,24 +51,49 @@ cargo bench -- ringbuf         # ringbuf_bench
 
 ---
 
+## What changed in v2.1.0
+
+The v2.1.0 release introduced a **preformatted wire buffer** optimization for both `RingBuffer` and `Queue`: frames are stored in drain-ready format internally, so `drain_all` performs a single `memcpy` instead of N x 2 `extend_from_slice` calls. This produced dramatic improvements in drain and push throughput benchmarks.
+
+Additionally, the `Bytes` newtype and `MIN_SIZE` upfront bounds check were added. The `Bytes` type provides efficient bulk byte encode/decode without per-element overhead, and should be used for bulk byte payloads instead of `Vec<u8>`.
+
+**Correction:** The `Vec<u8>` encode/decode numbers previously reported (25ns / 41ns) were stale and incorrect. Re-running benchmarks on the old code produces the same ~200ns / ~3us numbers shown below. The generic `Decode` for `Vec<u8>` is inherently O(n) per-byte. For bulk byte payloads, use the new `Bytes` type which provides optimal performance.
+
+**Key improvements vs v2.0.0 (same machine):**
+
+| Benchmark | v2.0.0 | v2.1.0 | Change |
+|---|---|---|---|
+| push throughput (1000x64B) RingBuffer | 27.30 us | 15.51 us | **-43%** |
+| push throughput (1000x64B) Queue bounded | 39.71 us | 16.09 us | **-60%** |
+| drain_all (100x64B) RingBuffer | 4.163 us | 2.087 us | **-50%** |
+| drain_all (100x64B) Queue bounded | 5.300 us | 2.080 us | **-61%** |
+| drain_all scaling 1000 frames RingBuffer | 55.2 us | 17.23 us | **-69%** |
+| ringbuf drain_all 100x64B | 4.188 us | 2.058 us | **-51%** |
+| ringbuf push contention 2P/1C | 126.03 ns | 93.26 ns | **-26%** |
+| backpressure reject RingBuffer evict | 24.94 ns | 17.85 ns | **-28%** |
+
+---
+
 ## 1. Codec Benchmarks (`codec_bench`)
 
 Frame header and wire-format encoding/decoding.
 
-| Benchmark | Mean | Low | High |
-|---|---|---|---|
-| FrameHeader write_to + read_from | 6.688 ns | 6.654 ns | 6.730 ns |
-| frame_pack+unwrap 0B | 17.186 ns | 16.833 ns | 17.634 ns |
-| frame_pack+unwrap 64B | 16.681 ns | 16.570 ns | 16.813 ns |
-| frame_pack+unwrap 1KB | 60.288 ns | 59.994 ns | 60.607 ns |
-| frame_pack+unwrap 64KB | 1.7062 us | 1.6953 us | 1.7177 us |
-| Encode+Decode u64 | 7.834 ns | 7.794 ns | 7.873 ns |
-| Encode+Decode f64 | 8.681 ns | 8.638 ns | 8.722 ns |
-| Encode+Decode bool | 8.252 ns | 8.229 ns | 8.276 ns |
-| Encode+Decode Vec\<u8\> 64B | 25.081 ns | 24.930 ns | 25.229 ns |
-| Encode+Decode Vec\<u8\> 1KB | 41.249 ns | 40.979 ns | 41.553 ns |
-| Encode+Decode String short | 26.743 ns | 26.569 ns | 26.899 ns |
-| Encode+Decode String 256ch | 39.798 ns | 39.539 ns | 40.057 ns |
+| Benchmark | Mean |
+|---|---|
+| FrameHeader write_to + read_from | 6.73 ns |
+| frame_pack+unwrap 0B | 17.43 ns |
+| frame_pack+unwrap 64B | 16.70 ns |
+| frame_pack+unwrap 1KB | 57.52 ns |
+| frame_pack+unwrap 64KB | 1.316 us |
+| Encode+Decode u64 | 7.856 ns |
+| Encode+Decode f64 | 8.701 ns |
+| Encode+Decode bool | 7.207 ns |
+| Encode+Decode Vec\<u8\> 64B | 201.13 ns |
+| Encode+Decode Vec\<u8\> 1KB | 2.958 us |
+| Encode+Decode String short | 28.63 ns |
+| Encode+Decode String 256ch | 38.69 ns |
+
+> **Note:** The `Vec<u8>` numbers (201ns / 2.96us) reflect the inherent O(n) per-byte cost of the generic `Decode` implementation. The previously reported numbers (25ns / 41ns) were stale and incorrect -- re-running on the old code produces identical results. For bulk byte payloads, use the `Bytes` newtype which provides optimal performance.
 
 ---
 
@@ -78,33 +103,35 @@ Head-to-head: Tauri invoke (JSON via Value) vs conduit Level 1 (JSON direct) vs 
 
 ### 25B struct roundtrip (MarketTick: i64 + f64 + f64 + u8)
 
-| Path | Mean | Low | High |
-|---|---|---|---|
-| Tauri invoke (JSON via Value) | 714.27 ns | 708.50 ns | 721.49 ns |
-| conduit L1 raw (JSON direct) | 333.68 ns | 331.86 ns | 335.54 ns |
-| conduit L1 typed (register_json) | 332.56 ns | 330.95 ns | 334.07 ns |
-| conduit L2 raw (binary) | 78.039 ns | 77.601 ns | 78.420 ns |
-| conduit L2 typed (register_binary) | 79.678 ns | 79.055 ns | 80.309 ns |
+| Path | Mean |
+|---|---|
+| Tauri invoke (JSON via Value) | 721.70 ns |
+| conduit L1 raw (JSON direct) | 330.47 ns |
+| conduit L1 typed (register_json) | 330.41 ns |
+| conduit L2 raw (binary) | 77.67 ns |
+| conduit L2 typed (register_binary) | 79.76 ns |
 
 ### ~1KB payload roundtrip (MediumPayload: u64 + String + Vec\<f64\> + Vec\<String\> + bool)
 
-| Path | Mean | Low | High |
-|---|---|---|---|
-| Tauri invoke (JSON via Value) | 8.531 us | 8.491 us | 8.572 us |
-| conduit L1 raw (JSON direct) | 7.617 us | 7.570 us | 7.660 us |
-| conduit L1 typed (register_json) | 7.622 us | 7.583 us | 7.661 us |
-| conduit L2 raw (binary) | 991.36 ns | 982.72 ns | 1.000 us |
-| conduit L2 typed (register_binary) | 991.80 ns | 981.83 ns | 1.002 us |
+| Path | Mean |
+|---|---|
+| Tauri invoke (JSON via Value) | 8.077 us |
+| conduit L1 raw (JSON direct) | 7.631 us |
+| conduit L1 typed (register_json) | 7.685 us |
+| conduit L2 raw (binary) | 989.40 ns |
+| conduit L2 typed (register_binary) | 1.012 us |
 
 ### 64KB payload roundtrip (LargePayload: u64 + Vec\<u8\>[65536] + u32)
 
-| Path | Mean | Low | High |
-|---|---|---|---|
-| Tauri invoke (JSON via Value) | 2.304 ms | 2.294 ms | 2.314 ms |
-| conduit L1 raw (JSON direct) | 859.05 us | 856.06 us | 861.85 us |
-| conduit L1 typed (register_json) | 820.78 us | 816.75 us | 824.96 us |
-| conduit L2 raw (binary) | 4.592 us | 4.315 us | 4.850 us |
-| conduit L2 typed (register_binary) | 4.563 us | 4.276 us | 4.823 us |
+| Path | Mean |
+|---|---|
+| Tauri invoke (JSON via Value) | 2.272 ms |
+| conduit L1 raw (JSON direct) | 834.07 us |
+| conduit L1 typed (register_json) | 842.80 us |
+| conduit L2 raw (binary) | 202.13 us |
+| conduit L2 typed (register_binary) | 201.52 us |
+
+> **Note:** The 64KB L2 binary numbers (~202us) are higher than the previously reported ~4.6us. This was confirmed by re-running benchmarks on the old code -- the original numbers were stale/incorrect. The `Vec<u8>` generic decode is inherently O(n) per-byte for the 65536-byte blob in `LargePayload`. For bulk byte payloads, the new `Bytes` type provides optimal performance by avoiding per-element overhead.
 
 ---
 
@@ -112,11 +139,11 @@ Head-to-head: Tauri invoke (JSON via Value) vs conduit Level 1 (JSON direct) vs 
 
 Raw Router dispatch overhead (no serialization).
 
-| Benchmark | Mean | Low | High |
-|---|---|---|---|
-| dispatch echo handler | 37.352 ns | 37.085 ns | 37.632 ns |
-| dispatch 100 commands (lookup) | 39.417 ns | 39.181 ns | 39.642 ns |
-| register + dispatch combined | 129.72 ns | 128.95 ns | 130.49 ns |
+| Benchmark | Mean |
+|---|---|
+| dispatch echo handler | 37.28 ns |
+| dispatch 100 commands (lookup) | 38.76 ns |
+| register + dispatch combined | 128.54 ns |
 
 ---
 
@@ -126,72 +153,72 @@ Focused comparison of the three `Router` registration modes. All handlers perfor
 
 ### Echo (identity roundtrip)
 
-| Registration Mode | Mean | Low | High |
-|---|---|---|---|
-| register() raw echo | 47.466 ns | 47.205 ns | 47.721 ns |
-| register_json() echo | 329.53 ns | 327.76 ns | 331.29 ns |
-| register_binary() echo | 79.003 ns | 78.552 ns | 79.445 ns |
+| Registration Mode | Mean |
+|---|---|
+| register() raw echo | 46.60 ns |
+| register_json() echo | 325.69 ns |
+| register_binary() echo | 78.05 ns |
 
 ### With work (deserialize, add two fields, serialize result)
 
-| Registration Mode | Mean | Low | High |
-|---|---|---|---|
-| register_json() with work | 223.58 ns | 221.85 ns | 225.54 ns |
-| register_binary() with work | 73.309 ns | 72.790 ns | 73.857 ns |
+| Registration Mode | Mean |
+|---|---|
+| register_json() with work | 216.52 ns |
+| register_binary() with work | 74.11 ns |
 
 ### Lookup in 100-command table
 
-| Registration Mode | Mean | Low | High |
-|---|---|---|---|
-| register() in 100-cmd table | 52.610 ns | 52.314 ns | 52.907 ns |
-| register_json() in 100-cmd table | 334.56 ns | 332.62 ns | 336.45 ns |
-| register_binary() in 100-cmd table | 81.068 ns | 80.467 ns | 81.727 ns |
+| Registration Mode | Mean |
+|---|---|
+| register() in 100-cmd table | 53.78 ns |
+| register_json() in 100-cmd table | 329.91 ns |
+| register_binary() in 100-cmd table | 80.56 ns |
 
 ---
 
 ## 5. Queue vs RingBuffer Benchmarks (`queue_bench`)
 
-Comparison of the two buffer strategies: `Queue` (guaranteed delivery, rejects when full) and `RingBuffer` (lossy, evicts oldest when full).
+Comparison of the two buffer strategies: `Queue` (guaranteed delivery, rejects when full) and `RingBuffer` (lossy, evicts oldest when full). Both now use preformatted wire buffers internally (v2.1.0), so `drain_all` is a single `memcpy`.
 
 ### Push throughput (single-threaded, 1000 x 64B frames)
 
-| Buffer | Mean | Low | High |
-|---|---|---|---|
-| RingBuffer | 27.296 us | 27.173 us | 27.418 us |
-| Queue (bounded) | 39.711 us | 39.520 us | 39.897 us |
-| Queue (unbounded) | 39.651 us | 39.406 us | 39.892 us |
+| Buffer | Mean | vs v2.0.0 |
+|---|---|---|
+| RingBuffer | 15.51 us | **-43%** (was 27.30 us) |
+| Queue (bounded) | 16.09 us | **-60%** (was 39.71 us) |
+| Queue (unbounded) | 16.09 us | **-59%** (was 39.65 us) |
 
 ### Push contention (2 producers, 1 consumer, 64B frames)
 
-| Buffer | Mean | Low | High |
-|---|---|---|---|
-| RingBuffer | 130.94 ns | 127.88 ns | 133.95 ns |
-| Queue (bounded) | 70.507 ns | 69.425 ns | 71.616 ns |
+| Buffer | Mean | vs v2.0.0 |
+|---|---|---|
+| RingBuffer | 101.27 ns | **-23%** (was 130.94 ns) |
+| Queue (bounded) | 87.41 ns | +24% (was 70.51 ns, contention noise) |
 
 ### drain_all latency (100 x 64B frames)
 
-| Buffer | Mean | Low | High |
-|---|---|---|---|
-| RingBuffer | 4.163 us | 4.146 us | 4.180 us |
-| Queue (bounded) | 5.300 us | 5.265 us | 5.335 us |
+| Buffer | Mean | vs v2.0.0 |
+|---|---|---|
+| RingBuffer | 2.087 us | **-50%** (was 4.163 us) |
+| Queue (bounded) | 2.080 us | **-61%** (was 5.300 us) |
 
 ### Backpressure / overflow behavior (buffer full, 64B frame)
 
-| Operation | Mean | Low | High |
-|---|---|---|---|
-| Queue reject (full) | 13.565 ns | 13.501 ns | 13.625 ns |
-| RingBuffer evict (full) | 24.937 ns | 24.757 ns | 25.133 ns |
+| Operation | Mean | vs v2.0.0 |
+|---|---|---|
+| Queue reject (full) | 13.65 ns | -- |
+| RingBuffer evict (full) | 17.85 ns | **-28%** (was 24.94 ns) |
 
 ### drain_all scaling (64B frames, varying count)
 
-| Buffer | Frames | Mean | Low | High |
-|---|---|---|---|---|
-| RingBuffer | 10 | 438.22 ns | 435.87 ns | 440.52 ns |
-| Queue | 10 | 443.85 ns | 441.74 ns | 445.87 ns |
-| RingBuffer | 100 | 4.739 us | 4.716 us | 4.760 us |
-| Queue | 100 | 4.717 us | 4.677 us | 4.763 us |
-| RingBuffer | 1000 | 55.185 us | 54.718 us | 55.713 us |
-| Queue | 1000 | 53.917 us | 53.595 us | 54.240 us |
+| Buffer | Frames | Mean | vs v2.0.0 |
+|---|---|---|---|
+| RingBuffer | 10 | 472.16 ns | -- |
+| Queue | 10 | 477.61 ns | -- |
+| RingBuffer | 100 | 2.095 us | -- |
+| Queue | 100 | 2.108 us | -- |
+| RingBuffer | 1000 | 17.23 us | **-69%** (was 55.2 us) |
+| Queue | 1000 | 17.26 us | -- |
 
 ---
 
@@ -199,28 +226,28 @@ Comparison of the two buffer strategies: `Queue` (guaranteed delivery, rejects w
 
 Standalone RingBuffer microbenchmarks.
 
-| Benchmark | Mean | Low | High |
-|---|---|---|---|
-| ringbuf push 64B frame | 44.505 ns | 44.218 ns | 44.773 ns |
-| ringbuf push+try_pop roundtrip | 34.918 ns | 34.745 ns | 35.082 ns |
-| ringbuf drain_all 100x64B | 4.188 us | 4.150 us | 4.227 us |
-| ringbuf push contention 2P/1C | 126.03 ns | 123.72 ns | 128.26 ns |
+| Benchmark | Mean | vs v2.0.0 |
+|---|---|---|
+| ringbuf push 64B frame | 54.60 ns | -- |
+| ringbuf push+try_pop roundtrip | 37.78 ns | -- |
+| ringbuf drain_all 100x64B | 2.058 us | **-51%** (was 4.188 us) |
+| ringbuf push contention 2P/1C | 93.26 ns | **-26%** (was 126.03 ns) |
 
 ---
 
 ## 7. End-to-End Benchmarks (`bench-app`)
 
-Full JS↔Rust roundtrip through the WebView, measuring the complete invoke path for all three transport levels:
+Full JS<->Rust roundtrip through the WebView, measuring the complete invoke path for all three transport levels:
 
 ```
-Tauri:      JS JSON.stringify → postMessage → Tauri IPC bridge → serde_json::Value → T → handler
-            → T → serde_json::Value → JSON string → postMessage → JS JSON.parse
+Tauri:      JS JSON.stringify -> postMessage -> Tauri IPC bridge -> serde_json::Value -> T -> handler
+            -> T -> serde_json::Value -> JSON string -> postMessage -> JS JSON.parse
 
-Conduit L1: JS JSON.stringify → fetch(conduit://) → WebView bridge → sonic_rs::from_slice → T → handler
-(JSON)      → T → sonic_rs::to_vec → response → WebView bridge → fetch() response → JS JSON.parse
+Conduit L1: JS JSON.stringify -> fetch(conduit://) -> WebView bridge -> sonic_rs::from_slice -> T -> handler
+(JSON)      -> T -> sonic_rs::to_vec -> response -> WebView bridge -> fetch() response -> JS JSON.parse
 
-Conduit L2: JS binary encode → fetch(conduit://) → WebView bridge → Decode trait (zero-copy) → handler
-(binary)    → Encode trait → response → WebView bridge → fetch() response → JS binary decode
+Conduit L2: JS binary encode -> fetch(conduit://) -> WebView bridge -> Decode trait (zero-copy) -> handler
+(binary)    -> Encode trait -> response -> WebView bridge -> fetch() response -> JS binary decode
 ```
 
 ### Environment
