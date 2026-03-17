@@ -1,7 +1,7 @@
 {
   "name": "tauri-plugin-conduit",
   "version": "2.1.0",
-  "description": "High-performance binary IPC client for Tauri v2",
+  "description": "Drop-in replacement for Tauri's invoke(). One import change, zero config. Binary IPC under the hood.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/userFRM/tauri-conduit/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/tauri-plugin-conduit.svg)](https://crates.io/crates/tauri-plugin-conduit)
+[![npm](https://img.shields.io/npm/v/tauri-plugin-conduit.svg)](https://www.npmjs.com/package/tauri-plugin-conduit)
+[![npm downloads](https://img.shields.io/npm/dm/tauri-plugin-conduit.svg)](https://www.npmjs.com/package/tauri-plugin-conduit)
 [![docs.rs](https://docs.rs/tauri-plugin-conduit/badge.svg)](https://docs.rs/tauri-plugin-conduit)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)

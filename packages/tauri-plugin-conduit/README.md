@@ -1,6 +1,11 @@
 # tauri-plugin-conduit
 
-High-performance binary IPC client for Tauri v2.
+[![npm](https://img.shields.io/npm/v/tauri-plugin-conduit.svg)](https://www.npmjs.com/package/tauri-plugin-conduit)
+[![npm downloads](https://img.shields.io/npm/dm/tauri-plugin-conduit.svg)](https://www.npmjs.com/package/tauri-plugin-conduit)
+
+Drop-in replacement for Tauri's `invoke()`. One import change, zero config. Binary IPC under the hood.
+
+See the [main repository](https://github.com/userFRM/tauri-conduit) for full documentation, benchmarks, and architecture.
 
 ## Install
 
