@@ -20,7 +20,7 @@
     "build": "tsc",
     "check": "tsc --noEmit",
     "prepublishOnly": "npm run build",
-    "test": "node --test src/__tests__/*.test.ts"
+    "test": "tsx --test src/__tests__/*.test.ts"
   },
   "keywords": [
     "tauri",
@@ -41,6 +41,7 @@
   "devDependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@types/node": "^25.3.5",
+    "tsx": "^4.20.5",
     "typescript": "^5.7"
   },
   "engines": {
