@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
-**Optional IPC path for Tauri apps that want a fetch-based transport with the same process-local runtime model. One import change, zero config, binary support when you need it.**
+**Drop-in replacement for Tauri's `invoke()`. One import change, zero config, with a fetch-based in-process transport and binary support when you need it.**
 
 ```diff
 - import { invoke } from '@tauri-apps/api/core';
@@ -25,7 +25,7 @@
 
 ## Performance
 
-Tauri's built-in `invoke()` is a solid default and a good fit for many apps. conduit is aimed at cases where transport overhead, built-in binary handling, or high-rate streaming become meaningful parts of the profile.
+conduit is aimed at apps where transport overhead, binary request/response handling, or high-rate streaming become meaningful parts of the profile. If you want to stay on a Tauri-compatible `invoke()` surface while optimizing those paths, this is the intended fit.
 
 All numbers are **Rust dispatch layer only** (excludes WebView bridge, `fetch()`, JS parsing). See [BENCHMARKS.md](BENCHMARKS.md) for full methodology.
 
@@ -279,9 +279,9 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 **Threat model**: The invoke key protects against cross-origin requests (other tabs, browser extensions intercepting network requests). It does **not** protect against malicious JavaScript running in the same WebView context -- any JS with access to the page can obtain the key via `fetch()` interception or DevTools. This matches Tauri's own trust model: the WebView JS context is trusted. Disable DevTools in production builds.
 
-## How it fits alongside Tauri's built-in IPC
+## Why conduit
 
-If Tauri's built-in IPC already meets your needs, it remains the simplest default. conduit is meant for projects that want a compatible `invoke()` surface, built-in binary request/response support, or higher-throughput streaming primitives.
+conduit is meant for projects that want to keep the familiar `invoke()` call shape while getting a fetch-based in-process transport, built-in binary request/response support, and higher-throughput streaming primitives.
 
 `#[tauri_conduit::command]` is designed to stay close to `#[tauri::command]`: named parameters (camelCase conversion included), `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
 
