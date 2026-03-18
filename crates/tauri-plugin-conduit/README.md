@@ -12,7 +12,7 @@ Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace 
 ## Usage
 
 ```rust
-use conduit::{command, handler};
+use tauri_conduit::{command, handler};
 
 #[command]
 fn greet(name: String) -> String {

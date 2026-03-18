@@ -36,7 +36,7 @@
  */
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { bootstrap, type BootstrapInfo } from './negotiate.js';
+import { bootstrap, type BootstrapInfo, validateChannel } from './negotiate.js';
 import { createProtocolTransport, type ProtocolTransport } from './transport/protocol.js';
 import { ConduitError } from './error.js';
 
@@ -163,10 +163,11 @@ function buildConduit(
     callback: (data: ArrayBuffer) => void,
     onError?: (err: Error) => void,
   ): Promise<UnsubscribeFn> {
+    await validateChannel(channel);
+
     const unlisten = await listen<string>(
-      'conduit:data-available',
-      async (event) => {
-        if (event.payload !== channel) return;
+      `conduit:data-available:${channel}`,
+      async (_event) => {
         try {
           const buf = await drainChannel(channel);
           if (buf.byteLength > 0) {
@@ -193,8 +194,12 @@ function buildConduit(
       if (buf.byteLength > 0) {
         callback(buf);
       }
-    } catch {
-      // Ignore — channel may be empty
+    } catch (err) {
+      if (onError) {
+        onError(err instanceof Error ? err : new Error(String(err)));
+      } else {
+        console.error(`conduit: initial drain error on channel "${channel}":`, err);
+      }
     }
     return wrappedUnlisten;
   }

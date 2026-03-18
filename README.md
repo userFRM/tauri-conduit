@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
-**Drop-in replacement for Tauri's invoke(). One import change, zero config. Binary IPC under the hood.**
+**Optional IPC path for Tauri apps that want a fetch-based transport with the same process-local runtime model. One import change, zero config, binary support when you need it.**
 
 ```diff
 - import { invoke } from '@tauri-apps/api/core';
@@ -25,6 +25,8 @@
 
 ## Performance
 
+Tauri's built-in `invoke()` is a solid default and a good fit for many apps. conduit is aimed at cases where transport overhead, built-in binary handling, or high-rate streaming become meaningful parts of the profile.
+
 All numbers are **Rust dispatch layer only** (excludes WebView bridge, `fetch()`, JS parsing). See [BENCHMARKS.md](BENCHMARKS.md) for full methodology.
 
 <img src="docs/images/payload-scaling.png" alt="Tauri invoke vs conduit — roundtrip latency by payload size" width="100%">
@@ -35,19 +37,19 @@ All numbers are **Rust dispatch layer only** (excludes WebView bridge, `fetch()`
 | ~1 KB | 8.1 µs | 7.6 µs (**1.1x**) | 1.0 µs (**8x**) |
 | 64 KB | 2.27 ms | 834 µs (**2.7x**) | 202 µs (**11x**) |
 
-### Why L1 barely wins at 1 KB
+### Why L1 only changes the picture slightly at 1 KB
 
 <img src="docs/images/bottleneck-breakdown.png" alt="Where does the time go? — Tauri invoke latency breakdown" width="100%">
 
-At small payloads (25B), WebView transport overhead is 54% of total cost — conduit eliminates that and wins 2.2x. At 1 KB, JSON serialization is 82% of cost — transport is only 6%, so L1 (which still uses JSON) barely wins. L2 binary skips JSON entirely and delivers 8-11x regardless of payload size.
+At small payloads (25B), WebView transport overhead is 54% of total cost, so the custom protocol path helps more. At 1 KB, JSON serialization is 82% of cost and transport is only 6%, so L1 stays closer to Tauri's built-in IPC. L2 binary skips JSON entirely and therefore changes the tradeoff more substantially.
 
 > Measured with [criterion](https://bheisler.github.io/criterion.rs/) on Intel i7-10700KF @ 3.80 GHz. Run `cd crates/conduit-core && cargo bench -- comparison` to see numbers on your hardware.
 
 ### Two levels of optimization
 
-**Level 1 (drop-in)** — `invoke()` is API-compatible with Tauri's built-in invoke. Still uses JSON, but routes through conduit's in-process custom protocol and uses [sonic-rs](https://github.com/cloudwego/sonic-rs) (SIMD-accelerated) to deserialize directly to the target type in one step, skipping serde_json's intermediate `Value` conversion.
+**Level 1 (drop-in)** — `invoke()` is API-compatible with Tauri's built-in invoke. It still uses JSON, but routes through conduit's in-process custom protocol and uses [sonic-rs](https://github.com/cloudwego/sonic-rs) (SIMD-accelerated) to deserialize directly to the target type in one step, skipping serde_json's intermediate `Value` conversion.
 
-**Level 2 (binary)** — `invokeBinary()` eliminates JSON entirely. Raw bytes in, raw bytes out. Use `#[derive(Encode, Decode)]` for typed binary structs, or pass raw `Uint8Array` for full control.
+**Level 2 (binary)** — `invokeBinary()` avoids JSON entirely. Raw bytes in, raw bytes out. Use `#[derive(Encode, Decode)]` for typed binary structs, or pass raw `Uint8Array` for full control.
 
 ## Getting Started
 
@@ -132,7 +134,7 @@ Like Tauri's `#[tauri::command]`, tauri-conduit's `#[command]` macro automatical
 
 conduit includes built-in streaming from Rust to JavaScript via ring buffers and Tauri events.
 
-> **Note:** The default `.channel("name")` creates a **lossy** ring buffer -- oldest frames are silently dropped when the buffer is full. Use `.channel_ordered("name")` for guaranteed-delivery ordered channels (backed by an unbounded queue -- monitor memory usage).
+> **Note:** The default `.channel("name")` creates a **lossy** ring buffer -- oldest frames are silently dropped when the buffer is full. Use `.channel_ordered("name")` for guaranteed-delivery ordered channels. Both channel types default to a 64 KB budget; use `channel_ordered_with_capacity(0)` only if you explicitly want an unbounded ordered queue.
 
 Two channel types are available:
 
@@ -238,7 +240,7 @@ sequenceDiagram
     CP->>JS: ArrayBuffer
 ```
 
-**Why Level 1 is faster even though it still uses JSON:** Tauri's built-in invoke deserializes JSON into an intermediate `serde_json::Value`, then converts that Value into your typed struct -- two deserialization steps. conduit uses [sonic-rs](https://github.com/cloudwego/sonic-rs) (SIMD-accelerated JSON) to deserialize directly from bytes to the target struct in one step, and routes through an in-process custom protocol instead of the webview message bridge.
+**Why Level 1 can still help even though it still uses JSON:** Tauri's built-in invoke deserializes JSON into an intermediate `serde_json::Value`, then converts that value into your typed struct. conduit uses [sonic-rs](https://github.com/cloudwego/sonic-rs) (SIMD-accelerated JSON) to deserialize directly from bytes to the target struct in one step, and routes through an in-process custom protocol instead of the webview message bridge.
 
 | | Tauri `invoke()` | conduit `invoke()` | conduit `invokeBinary()` |
 |---|---|---|---|
@@ -277,9 +279,11 @@ Everything runs in-process -- no ports, no sockets, no network endpoints.
 
 **Threat model**: The invoke key protects against cross-origin requests (other tabs, browser extensions intercepting network requests). It does **not** protect against malicious JavaScript running in the same WebView context -- any JS with access to the page can obtain the key via `fetch()` interception or DevTools. This matches Tauri's own trust model: the WebView JS context is trusted. Disable DevTools in production builds.
 
-## Differences from Tauri's built-in IPC
+## How it fits alongside Tauri's built-in IPC
 
-Level 1 is a drop-in replacement — change one import and you're done. `#[tauri_conduit::command]` has full parity with `#[tauri::command]`: named parameters (camelCase conversion included), `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
+If Tauri's built-in IPC already meets your needs, it remains the simplest default. conduit is meant for projects that want a compatible `invoke()` surface, built-in binary request/response support, or higher-throughput streaming primitives.
+
+`#[tauri_conduit::command]` is designed to stay close to `#[tauri::command]`: named parameters (camelCase conversion included), `State<T>`, `AppHandle`, `Window`/`Webview` injection, async, and `Result<T, E>`.
 
 For streaming, conduit provides high-throughput ring buffer channels (`subscribe()`/`drain()`). For per-invocation progress callbacks, use `AppHandle::emit()` directly — handlers have full access to Tauri's event system via `AppHandle` injection.
 
@@ -303,7 +307,7 @@ The `tauri-conduit` facade crate (6 lines) exists solely to enable the `#[tauri_
 ```sh
 cargo test --workspace                                    # core + derive crates
 cargo test --manifest-path crates/tauri-plugin-conduit/Cargo.toml  # plugin unit tests
-cd packages/tauri-plugin-conduit && npx tsx --test src/__tests__/*.test.ts  # TS codec tests
+cd packages/tauri-plugin-conduit && npm test                              # TS codec tests
 ```
 
 > **Note:** There are no end-to-end integration tests that exercise the full Tauri->conduit->WebView roundtrip. The test suite covers unit-level Rust dispatch, codec correctness, and TypeScript wire format -- not the custom protocol transport under a running Tauri app.

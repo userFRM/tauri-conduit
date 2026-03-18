@@ -53,13 +53,19 @@ jobs:
           node-version: '20'
       - name: Install dependencies
         working-directory: packages/tauri-plugin-conduit
-        run: npm install
+        run: npm ci
       - name: Type check
         working-directory: packages/tauri-plugin-conduit
         run: npx tsc --noEmit
       - name: Run TypeScript tests
-        run: npx tsx --test src/__tests__/*.test.ts
         working-directory: packages/tauri-plugin-conduit
+        run: npm test
+      - name: Smoke test npm package contents
+        working-directory: packages/tauri-plugin-conduit
+        run: |
+          npm run build
+          npm pack --dry-run 2>&1 | tee /tmp/tauri-plugin-conduit-pack.txt
+          grep 'dist/index.js' /tmp/tauri-plugin-conduit-pack.txt
 
   tauri-plugin-conduit:
     name: tauri-plugin-conduit
