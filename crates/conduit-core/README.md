@@ -7,7 +7,7 @@
 
 Binary IPC core for Tauri v2: codec, router, ring buffer, and ordered queue.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.1.0).
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.1.1).
 
 ## Features
 

@@ -113,7 +113,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
 name = "conduit-core"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "conduit-derive",
  "criterion",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "conduit-derive"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "conduit-core",
  "proc-macro2",
@@ -771,7 +771,7 @@ checksum = "591ef38edfb78ca4771ee32cf494cb8771944bee237a9b91fc9c1424ac4b777b"
 
 [[package]]
 name = "tauri-conduit"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "conduit-core",
  "conduit-derive",

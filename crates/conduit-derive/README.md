@@ -7,7 +7,7 @@
 
 Proc macros for [conduit-core](https://crates.io/crates/conduit-core): `#[derive(Encode, Decode)]`, `#[command]`, and `handler!()`.
 
-Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.1.0).
+Part of the [tauri-conduit](https://github.com/userFRM/tauri-conduit) workspace (v2.1.1).
 
 ## Usage
 

@@ -1,6 +1,6 @@
 [package]
 name = "tauri-conduit"
-version = "2.1.0"
+version = "2.1.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -10,5 +10,5 @@ homepage = "https://github.com/userFRM/tauri-conduit"
 readme = "README.md"
 
 [dependencies]
-conduit-derive = { version = "2.1.0", path = "../conduit-derive" }
-conduit-core = { version = "2.1.0", path = "../conduit-core" }
+conduit-derive = { version = "2.1.1", path = "../conduit-derive" }
+conduit-core = { version = "2.1.1", path = "../conduit-core" }

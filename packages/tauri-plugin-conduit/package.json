@@ -1,6 +1,6 @@
 {
   "name": "tauri-plugin-conduit",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Drop-in replacement for Tauri's invoke(). One import change, zero config. Binary IPC under the hood.",
   "type": "module",
   "main": "dist/index.js",
