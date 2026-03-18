@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/tauri-plugin-conduit.svg)](https://www.npmjs.com/package/tauri-plugin-conduit)
 [![npm downloads](https://img.shields.io/npm/dm/tauri-plugin-conduit.svg)](https://www.npmjs.com/package/tauri-plugin-conduit)
 
-Optional IPC client for Tauri apps that want a fetch-based transport with binary support and a minimal API change.
+Drop-in replacement for Tauri's `invoke()` for apps that want a fetch-based transport and binary support with minimal API change.
 
 See the [main repository](https://github.com/userFRM/tauri-conduit) for full documentation, benchmarks, and architecture.
 
@@ -15,7 +15,7 @@ npm install tauri-plugin-conduit
 
 ## Quick Start
 
-Compatible `invoke()` surface:
+Drop-in replacement for `@tauri-apps/api/core`:
 
 ```typescript
 import { invoke } from 'tauri-plugin-conduit';
@@ -44,7 +44,7 @@ const unsub = await subscribe('telemetry', (buf) => {
 
 ## API
 
-- `invoke<T>(cmd, args?, options?)` — JSON request/response with a Tauri-compatible `invoke()` shape
+- `invoke<T>(cmd, args?, options?)` — JSON request/response (drop-in replacement for Tauri's `invoke()`)
 - `invokeBinary(cmd, payload?, options?)` — binary request/response (raw bytes)
 - `subscribe(channel, callback, onError?)` — event-driven push streaming (no polling)
 - `drain(channel)` — pull-based ring buffer access (user controls timing)
