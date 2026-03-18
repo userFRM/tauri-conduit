@@ -71,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `RingBuffer::push()` returns `usize` (number of evicted frames) instead of `PushOutcome`. Use `push_checked()` for richer outcome
 - **Breaking:** `ChannelBuffer::push()` returns `Result<usize, Error>` instead of `Result<PushOutcome, Error>`. Use `push_checked()` for richer outcome
 - **Breaking:** `Error::Serialize` wraps `sonic_rs::Error` directly instead of `String` (restores `source()` chain)
-- **Breaking:** Parameter names stay snake_case in JSON (no camelCase conversion). A Rust `user_name` is `user_name` in JS, not `userName`
+- **Breaking:** Parameter names follow Tauri-style camelCase conversion in JSON. A Rust `user_name` is passed as `userName` in JS
 - `PluginState::push()` returns `Result<(), String>` (backward-compatible with v1)
 - `conduit_subscribe` silently filters unknown channels instead of returning an error
 - `BootstrapInfo` derives `Clone`, `Serialize`, `Deserialize` with `#[serde(default)]` on `protocol_version`
