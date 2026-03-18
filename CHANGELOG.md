@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-03-18
+
+### Fixed
+
+- **npm package contents** — packed artifacts now reliably include `dist/*`, and CI smoke-checks the tarball contents before release.
+- **TypeScript test workflow** — `npm test` now uses the same `tsx`-based path exercised in CI, fixing the local `ERR_MODULE_NOT_FOUND` failure mode.
+- **Channel subscriptions** — `subscribe()` now validates channels up front, uses per-channel events, and surfaces initial drain errors instead of silently swallowing them.
+- **Documentation accuracy** — aligned workspace/package version strings, fixed the plugin README import example, corrected ordered-channel wording, and refined the README positioning without dropping the drop-in replacement claim.
+
 ## [2.1.0] - 2026-03-17
 
 ### Performance — Rust core (conduit-core)
